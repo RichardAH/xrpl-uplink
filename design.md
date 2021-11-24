@@ -1,4 +1,5 @@
-Master Life-cycle:
+```
+Main Life-cycle:
 
 1.  Create main process (M)
     ./uplink <max peer count> [ <start peer ip> <start peer port> ]
@@ -33,3 +34,4 @@ Subscriber Life-cycle:
 4. M sends each packet from any S to all P's.
 
 5. A disconnected subscriber is immediately considered dead.
+```
