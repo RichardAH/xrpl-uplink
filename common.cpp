@@ -1,5 +1,34 @@
 #include "uplink.h"
 
+Hash hash(const void* mem, int len)
+{
+    Hash h { .q = { 0, 0, 0, 0 } };
+    uint64_t state = 0;
+    uint8_t* ptr = (uint8_t*)mem;
+    int i = 0, j = 0;
+    if (len >= 8)
+    for (; i < len ; i += 8, ++j)
+    {
+        state = _mm_crc32_u64(state, *(reinterpret_cast<uint64_t*>(ptr + i)));
+        h.d[j % 8] ^= state;
+    }
+
+    if (len == i)
+        return h;
+
+    uint64_t last = 0;
+    for (; i < len; ++i)
+    {
+        last <<= 8U;
+        last += ptr[i];
+    }
+
+    state = _mm_crc32_u64(state, last);
+    h.d[j % 8] ^= state;
+
+    return h;
+}
+
 // configure an fd to be nonblocking and close on exec
 int fd_set_flags(int fd, int new_flags)
 {

@@ -18,6 +18,15 @@
 #include <cstdlib>
 #include <stdint.h>
 #include <map>
+#include <nmmintrin.h>
+
+
+typedef union hash_ {
+    uint8_t b[32];
+    uint32_t d[8];
+    uint64_t q[4];
+} Hash;
+
 enum ddmode : int8_t 
 {
     DD_INVALID = -1,
@@ -30,5 +39,11 @@ enum ddmode : int8_t
 int fd_set_flags(int fd, int new_flags);
 int create_unix_accept(char* path);
 int32_t packet_id(char* packet_name);
-int main_mode(char* ip, int port, int peer_max, char* sock_path, char* db_path);
-int peer_mode(char* ip, int port, char* sock_path);
+int peer_mode(char* ip, int port, char* sock_path,
+        ddmode dd_default, std::map<int32_t, ddmode>& dd_specific);
+int main_mode(
+        char* ip, int port, int peer_max,
+        char* sock_path, char* db_path,
+        ddmode dd_default, std::map<int32_t, ddmode>& dd_specific);
+
+Hash hash(const void* mem, int len);

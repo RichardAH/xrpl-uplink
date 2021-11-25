@@ -46,8 +46,39 @@ ddmode parse_dd(char* dd)
         return DD_INVALID;
 }
 
+#define TEST_HASH(x)\
+    { \
+        Hash h = hash(x, strlen(x));\
+        printf("%.*s: ", 32, x);\
+        for (int i = 0; i < 32; ++i)\
+            printf("%02x", (unsigned char)(h.b[i]));\
+        printf("\n");\
+    }
 int main(int argc, char** argv)
 {
+
+    TEST_HASH("hello world");
+    TEST_HASH("hello world");
+    TEST_HASH(
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world");
+
+    TEST_HASH(
+            "hello world hell1 world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world hello world "
+            "hello world hello world hello world");
+   
+    return 0;
+
     if (argc < 4)
     {
         print_usage(argc, argv, 0);
@@ -62,17 +93,17 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    ddmode default_dd = DD_ALL;
+    ddmode dd_default = DD_ALL;
     if (argc >= 5)
-        default_dd = parse_dd(argv[4]);
+        dd_default = parse_dd(argv[4]);
 
-    if (default_dd == DD_INVALID)
+    if (dd_default == DD_INVALID)
     {
         print_usage(argc, argv, "default de-duplication mode may only be one of: all, none, sub, peer.");
         return 1;
     }
 
-    std::map<int32_t, ddmode> specific_dd; // packet_type => de-duplication mode
+    std::map<int32_t, ddmode> dd_specific; // packet_type => de-duplication mode
 
     char sock_path[32]; sock_path[0] = '\0';
     char db_path[32]; db_path[0] = '\0';
@@ -140,7 +171,7 @@ int main(int argc, char** argv)
                 if (packet > -1 && mode != DD_INVALID)
                 {
                     printf("packet: %d mode: %d\n", packet, mode);
-                    specific_dd.emplace(packet, mode);
+                    dd_specific.emplace(packet, mode);
                 }
                 else
                 {
@@ -172,7 +203,7 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(ip, port, sock_path);
+        return peer_mode(ip, port, sock_path, dd_default, dd_specific);
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max > 1)
     {
@@ -209,7 +240,7 @@ int main(int argc, char** argv)
         }
 
         // continue to main mode
-        return main_mode(ip, port, peer_max, sock_path, db_path);
+        return main_mode(ip, port, peer_max, sock_path, db_path, dd_default, dd_specific);
     }
     else
     {
