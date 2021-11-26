@@ -1,25 +1,32 @@
 #include "uplink.h"
 
+#define SPACES \
+"                                                                                                                    "    
 int print_usage(int argc, char** argv, const char* error)
 {
     fprintf(stderr, 
     "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s"
     "An XRPL peer-protocol endpoint for connecting local subscribers (applications) to the XRPL mesh network.\n"
-    "Usage:\n"
-    "Main-mode:  The process that subscribers connect to. Maintains a swarm of peer mode processes up to max-peers\n"
-    "  %s <max-peers> <peer-ip> <peer-port> [<default-ddmode> [mtPACKET:ddmode] ...] [sockdir=path] [dbdir=path]\n"
-    "Peer-mode:  Connects over TCP/IP to a specified XRPL peer, then bridges that peerto the hub (main-mode process).\n"
-    "  %s connect <peer-ip> <peer-port> [<default-ddmode> [mtPACKET:ddmode] ...] [sockdir=path]\n"
+    "Main-mode:\n"
+    "\tThe process that subscribers connect to. Maintains a swarm of peer mode processes up to max-peers\n"
+    "\tUsage: %s <max-peers> <first-peer-ip> <first-peer-port> \\\n"
+    "\t       %.*s [<default-ddmode> [mtPACKET:ddmode] ...] \\\n"
+    "\t       %.*s [sockdir=<path>] [dbdir=<path>] [keyfile=<path>]\n"
+    "Peer-mode:\n"
+    "\tConnects over TCP/IP to a specified XRPL peer, then bridges that peer to the hub (main-mode process).\n"
+    "\tUsage: %s connect <peer-ip> <peer-port> \\\n"
+    "\t       %.*s [sockdir=<path>] [keyfile=<path>]\n"
     "Path arguments:\n"
     "\tsockdir - directory in which peer.sock and subscriber.sock will be created or connected to\n"
     "\tdbdir   - (main mode only) directory in which peer database (list of seen and likely peers) are kept\n"
+    "\tkeyfile - a file containing a 32 byte private key to use for peer connections\n"
     "De-duplication modes (ddmode):\n"
     "\tall     - de-duplicate all packets in both directions (subscriber <-> peers)\n"
     "\tnone    - do not de-duplicate any packets in either direction\n"
     "\tpeer    - only de-duplicate inbound packets from peers (forward all duplicates from subscribers)\n"
     "\tsub     - only de-duplicate outgoing packets from subscribers (forward all duplicates from peers)\n"
-    "Note: The first de-duplication mode specified on the command-line is the default mode applied to all packets\n"
-    "Subsequent modes can be attached to specific packet types, e.g. mtGET_LEDGER:none mtTRANSACTION:all\n"
+    "\tNote: The first de-duplication mode specified on the command-line is the default mode applied to all packets\n"
+    "\tSubsequent modes can be attached to specific packet types, e.g. mtGET_LEDGER:none mtTRANSACTION:all\n"
     "Packet Types:\n"
     "\tmtMANIFESTS mtPING mtCLUSTER mtENDPOINTS mtTRANSACTION mtGET_LEDGER mtLEDGER_DATA mtPROPOSE_LEDGER\n"
     "\tmtSTATUS_CHANGE mtHAVE_SET mtVALIDATION mtGET_OBJECTS mtGET_SHARD_INFO mtSHARD_INFO mtGET_PEER_SHARD_INFO\n"
@@ -28,7 +35,12 @@ int print_usage(int argc, char** argv, const char* error)
     "\tmtTRANSACTIONS\n"
     "Example:\n"
     "       %s 10 r.ripple.com 51235 all mtGET_LEDGER:none\n",
-    VERSION, (error ? error : ""), (error ? "\n" : ""), argv[0], argv[0], argv[0]); 
+    VERSION, (error ? error : ""), (error ? "\n" : ""), argv[0],
+    strlen(argv[0]), SPACES,
+    strlen(argv[0]), SPACES,
+    argv[0], 
+    strlen(argv[0]), SPACES,
+    argv[0]); 
     return 1;
 }
 
@@ -46,6 +58,9 @@ ddmode parse_dd(char* dd)
         return DD_INVALID;
 }
 
+int main(int argc, char** argv)
+{
+/*
 #define TEST_HASH(x)\
     { \
         Hash h = hash(x, strlen(x));\
@@ -54,9 +69,6 @@ ddmode parse_dd(char* dd)
             printf("%02x", (unsigned char)(h.b[i]));\
         printf("\n");\
     }
-int main(int argc, char** argv)
-{
-
     TEST_HASH("hello world");
     TEST_HASH("hello world");
     TEST_HASH(
@@ -78,7 +90,7 @@ int main(int argc, char** argv)
             "hello world hello world hello world");
    
     return 0;
-
+*/
     if (argc < 4)
     {
         print_usage(argc, argv, 0);
@@ -105,16 +117,18 @@ int main(int argc, char** argv)
 
     std::map<int32_t, ddmode> dd_specific; // packet_type => de-duplication mode
 
-    char sock_path[32]; sock_path[0] = '\0';
-    char db_path[32]; db_path[0] = '\0';
+    char sock_path[PATH_MAX];   sock_path[0] = '\0';
+    char db_path[PATH_MAX];     db_path[0] = '\0';
+    char key_path[PATH_MAX];    key_path[0] = '\0';
+    
     // parse dds and remaining arguments
     {
         for (int i = 5; i < argc; ++i)
         {
-            char pktype[32]; pktype[0] = '\0'; char* pk = pktype;
-            char ddtype[32]; ddtype[0] = '\0'; char* dd = ddtype;
+            char pktype[PATH_MAX]; pktype[0] = '\0'; char* pk = pktype;
+            char ddtype[PATH_MAX]; ddtype[0] = '\0'; char* dd = ddtype;
             char* x = argv[i];
-            for (; *x != '\0' && *x != ':' && *x != '=' && (pk - pktype < 31); *pk++ = *x++);
+            for (; *x != '\0' && *x != ':' && *x != '=' && (pk - pktype < (PATH_MAX-1)); *pk++ = *x++);
 
             int is_path = *x == '=';
 
@@ -125,7 +139,7 @@ int main(int argc, char** argv)
                 return 1;
             }
 
-            for (++x; *x != '\0' && (dd - ddtype < 31); *dd++ = *x++);
+            for (++x; *x != '\0' && (dd - ddtype < (PATH_MAX-1)); *dd++ = *x++);
             *pk = '\0'; *dd = '\0';
 
             if (is_path)
@@ -156,6 +170,16 @@ int main(int argc, char** argv)
                         return 1;
                     }
                     strcpy(db_path, ddtype);
+                }
+                else if (strcmp(pktype, "keyfile") == 0)
+                {
+                    if (key_path[0] != 0)
+                    {
+                        print_usage(argc, argv,
+                            "keyfile specified more than once");
+                        return 1;
+                    }
+                    strcpy(key_path, ddtype);
                 }
                 else
                 {
@@ -189,21 +213,72 @@ int main(int argc, char** argv)
     if (sock_path[0] == 0)
         strcpy(sock_path, DEFAULT_SOCK_PATH);
 
+    if (key_path[0] == 0)
+    {
+        strcpy(key_path, DEFAULT_DB_PATH);
+        strcat(key_path, "/");
+        strcat(key_path, KEY_FN);
+    }
     
     // ensure socket path exists
     if (!(mkdir(sock_path, 0700) == 0 || errno == EEXIST))
     {
-        fprintf(stderr, "Could not create directory: `%s` for socket files\n", sock_path);
+        fprintf(stderr, "Could not create/access directory: `%s` for socket files\n", sock_path);
         return 1;
     }
 
+    // ensure db path exists
+    if (!(mkdir(db_path, 0700) == 0 || errno == EEXIST))
+    {
+        fprintf(stderr, "Could not create/access directory: `%s` for database files\n", db_path);
+        return 1;
+    }
+
+    // load the private key or create specified keyfile if it doesn't already exist
+    uint8_t key[32];
+    if (access(key_path, F_OK) == 0)
+    {
+        int fd = open(key_path, O_RDONLY);
+        if (fd < 0 || read(fd, key, 32) != 32)
+        {
+            fprintf(stderr, "Could not open keyfile %s for reading\n", key_path);
+            return 1;
+        }
+        close(fd);
+    }
+    else
+    {
+        fprintf(stderr, "Warning: creating keyfile %s with random key (file doesn't yet exist)\n", key_path);
+
+        // create the keyfile
+        int fd = open(key_path, O_WRONLY | O_CREAT, 0600);
+        if (fd < 0)
+        {
+            fprintf(stderr, "Could not open keyfile %s for writing\n", key_path);
+            return 1;
+        }
+        int rnd = open("/dev/urandom", O_RDONLY);
+        if (rnd < 0 || read(rnd, key, 32) != 32) // RH TODO: not every random 32 byte seq is a valid secp256k1 key
+        {
+            fprintf(stderr, "Could read /dev/urandom to generate key\n");
+            return 1;
+        }
+
+        if (write(fd, key, 32) !=32)
+        {
+            fprintf(stderr, "Could not write key to keyfile %s\n", key_path);
+            return 1;
+        }
+        close(rnd);
+        close(fd);
+    }
     
     int peer_max = 0;
 
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(ip, port, sock_path, dd_default, dd_specific);
+        return peer_mode(ip, port, sock_path, key, dd_default, dd_specific);
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max > 1)
     {
@@ -240,7 +315,7 @@ int main(int argc, char** argv)
         }
 
         // continue to main mode
-        return main_mode(ip, port, peer_max, sock_path, db_path, dd_default, dd_specific);
+        return main_mode(ip, port, peer_max, sock_path, db_path, key, dd_default, dd_specific);
     }
     else
     {
