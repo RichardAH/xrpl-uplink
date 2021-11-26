@@ -14,16 +14,9 @@ int main_mode(
     int peer_accept = -1;
     {
     
-        char path[PATH_MAX];
-        if (snprintf(path, PATH_MAX, "%s/%s", sock_path, PEER_FN) < 0)
-        {
-            fprintf(stderr, "Could not evaluate peer socket path\n");
-            return 1;
-        }
+        printf("Peer socket: %s\n", peer_path);
 
-        printf("Peer socket: %s\n", path);
-
-        if ((peer_accept = create_unix_accept(path)) == -1)
+        if ((peer_accept = create_unix_accept(peer_path)) == -1)
         {
             fprintf(stderr, "Could not create peer accept socket\n");
             return 1;
@@ -37,16 +30,9 @@ int main_mode(
     // task 2: open /var/run/xrpl-uplink/subscriber.sock accept mode
     int subscriber_accept = -1;
     {
-        char path[PATH_MAX];
-        if (snprintf(path, PATH_MAX, "%s/%s", sock_path, SUBSCRIBER_FN) < 0)
-        {
-            fprintf(stderr, "Could not evaluate subscriber socket path\n");
-            return 1;
-        }
+        printf("Subscriber socket: %s\n", subscriber_path);
 
-        printf("Subscriber socket: %s\n", path);
-
-        if ((subscriber_accept = create_unix_accept(path)) == -1)
+        if ((subscriber_accept = create_unix_accept(subscriber_path)) == -1)
         {
             fprintf(stderr, "Could not create subscriber accept socket\n");
             return 1;
@@ -83,7 +69,7 @@ int main_mode(
             return 5;
         }
 
-        printf("poll result %d\n");
+        printf("poll result %d\n", poll_result);
 
         sleep(1);
     }

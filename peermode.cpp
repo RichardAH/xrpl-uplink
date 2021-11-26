@@ -4,6 +4,7 @@
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
+#include <secp256k1.h>
 
 #define POLL_TIMEOUT 2000 /* ms */
 #define DEFAULT_BUF_SIZE 64
@@ -11,6 +12,10 @@
 #define DEBUG 0
 #define VERBOSE_DEBUG 0
 #define HTTP_BUFFER_SIZE 4096
+#define SSL_BUFFER_LENGTH 65536
+
+pid_t my_pid = 0;
+
 // ---------
 // PEER MODE
 // ---------
@@ -21,17 +26,18 @@
 
 int generate_node_keys(
     secp256k1_context* ctx,
-    uint8_t* keyin
+    uint8_t* keyin,
     uint8_t* outpubraw64,
     uint8_t* outpubcompressed33,
     char* outnodekeyb58,
-    ssize_t* outnodekeyb58size)
+    size_t* outnodekeyb58size)
 {
     secp256k1_pubkey* pubkey = (secp256k1_pubkey*)((void*)(outpubraw64));
 
     if (!secp256k1_ec_pubkey_create(ctx, pubkey, (const unsigned char*)keyin)) {
-        fprintf(stderr, "[FATAL] Could not generate secp256k1 keypair\n");
-        exit(5);
+        fprintf(stderr, "[%s:%d pid=%d] Could not generate secp256k1 keypair\n",
+                __FILE__, __LINE__, my_pid);
+        exit(EC_SECP256K1);
     }
 
     size_t out_size = 33;
@@ -58,9 +64,15 @@ int generate_node_keys(
     // generate base58 encoding
     b58enc(outnodekeyb58, outnodekeyb58size, outpubcompressed38, 38);
     outnodekeyb58[*outnodekeyb58size] = '\0';
+
+    return EC_SUCCESS;
 }
 
-int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
+int generate_upgrade(
+        secp256k1_context* secp256k1ctx, 
+        SSL* ssl, 
+        uint8_t* keyin,
+        char* bufout, int* buflen)
 {
     unsigned char buffer[1024];
     ssize_t len = 0;
@@ -68,8 +80,8 @@ int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
     len = SSL_get_finished(ssl, buffer, 1024);
     if (len < 12)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_finished\n", __FILE__, __LINE__, getpid());
-        return 0;
+        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_finished\n", __FILE__, __LINE__, my_pid);
+        return EC_SSL;
     }
 
     // SHA512 SSL_get_finished to create cookie 1
@@ -79,8 +91,8 @@ int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
     len = SSL_get_peer_finished(ssl, buffer, 1024);
     if (len < 12)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_peer_finished\n", __FILE__, __LINE__, getpid());
-        return 0;
+        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_peer_finished\n", __FILE__, __LINE__, my_pid);
+        return EC_SSL;
     }   
    
     // SHA512 SSL_get_peer_finished to create cookie 2
@@ -94,33 +106,49 @@ int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
     crypto_hash_sha512(cookie2, cookie1, 64);
 
     // generate keys
-
     uint8_t pub[64], pubc[33];
     char b58[100];
     size_t b58size = 100;
-    generate_node_keys(secp256k1ctx, keyin, pub, pubc, b58, &b58size);
+    
+    int rc = generate_node_keys(secp256k1ctx, keyin, pub, pubc, b58, &b58size);
+    if (rc != EC_SUCCESS)
+        return rc;
 
     secp256k1_ecdsa_signature sig;
-    secp256k1_ecdsa_sign(secp256k1ctx, &sig, cookie2, sec, NULL, NULL);
+    secp256k1_ecdsa_sign(secp256k1ctx, &sig, cookie2, keyin, NULL, NULL);
    
-    unsigned char buf[200];
-    size_t buflen = 200;
-    secp256k1_ecdsa_signature_serialize_der(secp256k1ctx, buf, &buflen, &sig);
+    unsigned char buf1[200];
+    size_t buflen1 = 200;
+    secp256k1_ecdsa_signature_serialize_der(secp256k1ctx, buf1, &buflen1, &sig);
 
     char buf2[200];
     size_t buflen2 = 200;
-    sodium_bin2base64(buf2, buflen2, buf, buflen, sodium_base64_VARIANT_ORIGINAL);
+    sodium_bin2base64(buf2, buflen2, buf1, buflen1, sodium_base64_VARIANT_ORIGINAL);
     buf2[buflen2] = '\0';
 
-    return snprintf(bufout, buflen, 
-                "GET / HTTP/1.1\r\n"
-                "User-Agent: %s\r\n"
-                "Upgrade: XRPL/2.0\r\n"
-                "Connection: Upgrade\r\n"
-                "Connect-As: Peer\r\n"
-                "Crawl: private\r\n"
-                "Session-Signature: %s\r\n"
-                "Public-Key: %s\r\n\r\n", USER_AGENT, buf2, b58);
+    int bytes_written = 
+        snprintf(bufout, *buflen, 
+            "GET / HTTP/1.1\r\n"
+            "User-Agent: %s-%s\r\n"
+            "Upgrade: XRPL/2.0\r\n"
+            "Connection: Upgrade\r\n"
+            "Connect-As: Peer\r\n"
+            "Crawl: private\r\n"
+            "Session-Signature: %s\r\n"
+            "Public-Key: %s\r\n\r\n", USER_AGENT, VERSION, buf2, b58);
+
+    if (bytes_written < *buflen)
+    {
+        *buflen = bytes_written;
+        return EC_SUCCESS;
+    }
+    else
+    {
+        fprintf(stderr, "[%s:%d pid=%d] Could not create upgrade request, buffer too small.\n",
+                __FILE__, __LINE__, my_pid);
+        *buflen = 0;
+        return EC_BUFFER;
+    }
 }
 
 
@@ -128,6 +156,15 @@ int peer_mode(
     char* ip, int port, char* main_path, uint8_t* key, 
     ddmode dd_default, std::map<int32_t, ddmode>& dd_specific)
 {
+
+    // global
+    my_pid = getpid();
+
+    // create secp256k1 context
+    secp256k1_context* secp256k1ctx = secp256k1_context_create(
+                SECP256K1_CONTEXT_VERIFY |
+                SECP256K1_CONTEXT_SIGN) ;
+    
     // connect to peer (TCP/IP)
     int peer_fd = -1;
     {
@@ -147,7 +184,7 @@ int peer_mode(
 
         if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could parse ip %s while trying to connect to peer\n"
+            fprintf(stderr, "[%s:%d pid=%d] Could parse ip %s while trying to connect to peer\n",
                     __FILE__, __LINE__, my_pid, ip);
             return EC_TCP;
         }
@@ -171,7 +208,7 @@ int peer_mode(
         // create socket
         if ((main_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not create peer unix domain socket (connecting)\n"
+            fprintf(stderr, "[%s:%d pid=%d] Could not create peer unix domain socket (connecting)\n",
                     __FILE__, __LINE__, my_pid);
             return EC_UNIX;
         }
@@ -201,8 +238,7 @@ int peer_mode(
     size_t ssl_write_len = 0;
     char*  ssl_encrypt_buf = 0;
     size_t ssl_encrypt_len = 0;
-
-    pid_t my_pid = getpid();
+    char ssl_buf[SSL_BUFFER_LENGTH];
 
     #define SSL_FAILED(x) (\
         (x) != SSL_ERROR_WANT_WRITE &&\
@@ -216,7 +252,7 @@ int peer_mode(
         {\
             bytes_read = BIO_read(wbio, ssl_buf, sizeof(ssl_buf));\
             if (DEBUG)\
-                fprintf(stderr, "[%s:%d pid=%d] flushing %d bytes\n", __FILE__, __LINE__, my_pid, bytes_read);\
+                fprintf(stderr, "[%s:%d pid=%d] flushing %ld bytes\n", __FILE__, __LINE__, my_pid, bytes_read);\
             if (bytes_read > 0)\
             {\
                 ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len + bytes_read);\
@@ -225,8 +261,8 @@ int peer_mode(
             }\
             else if (!BIO_should_retry(wbio))\
             {\
-                fprintf(stderr, "[%s:%d pid=%d] Could not enqueue outward SSL bytes: %s\n",\
-                        __FILE__, __LINE__, my_pid, ssl_error);\
+                fprintf(stderr, "[%s:%d pid=%d] Could not enqueue outward SSL bytes\n",\
+                        __FILE__, __LINE__, my_pid);\
                 return EC_SSL;\
             }\
         } while (bytes_read > 0);\
@@ -252,7 +288,7 @@ int peer_mode(
 
     SSL_CTX_set_ecdh_auto(ctx, 1);
     
-    ssl = SSL_new(ctx);
+    SSL* ssl = SSL_new(ctx);
     rbio = BIO_new(BIO_s_mem()); /* SSL reads from, we write to. */
     wbio = BIO_new(BIO_s_mem()); /* SSL writes to, we read from. */
     SSL_set_bio(ssl, rbio, wbio);
@@ -297,7 +333,7 @@ int peer_mode(
 
             fprintf(stderr, "[%s:%d pid=%d] SSL handshake timed out with peer %s:%d\n",
                 __FILE__, __LINE__, my_pid, ip, port);
-            return EC_PEER;
+            return EC_SSL;
         }
 
         // execution to here means the poll returned with one or more active fds / events
@@ -335,8 +371,8 @@ int peer_mode(
 
             if (bytes_written <= 0)
             {
-                fprintf(stderr, "[%s:%d pid=%d] Could not write encrypted bytes to socket: %s\n",
-                    __FILE__, __LINE__, my_pid, ssl_error); 
+                fprintf(stderr, "[%s:%d pid=%d] Could not write encrypted bytes to socket\n",
+                    __FILE__, __LINE__, my_pid); 
                 return EC_SSL;
             }
 
@@ -391,7 +427,11 @@ int peer_mode(
             {
                 //int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
                 char upgrade_request[HTTP_BUFFER_SIZE];
-                ssize_t len = generate_upgrade(ssl, key, upgrade_request, sizeof(upgrade_request));
+                int len = 0;
+                int rc = generate_upgrade(secp256k1ctx, ssl, key, upgrade_request, &len);
+                if (rc != EC_SUCCESS)
+                    return rc;
+
                 if (DEBUG)
                     fprintf(stderr, "[%s:%d pid=%d] Connection upgrade request to %s:%d\n%.*s%s",
                         __FILE__, __LINE__,  my_pid, ip, port,
@@ -412,7 +452,7 @@ int peer_mode(
                 size_t bytes_read = 0;
                 if (SSL_peek_ex(ssl, buffer, sizeof(buffer), &bytes_read))
                 {
-                    for (int i = 0; i < bytes_reads - 4; ++i)
+                    for (int i = 0; i < bytes_read - 4; ++i)
                     {
                         // looking for \r\n\r\n
                         if (buffer[i + 0] == '\r' &&

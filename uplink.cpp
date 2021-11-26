@@ -36,11 +36,9 @@ int print_usage(int argc, char** argv, const char* error)
     "Example:\n"
     "       %s 10 r.ripple.com 51235 all mtGET_LEDGER:none\n",
     VERSION, (error ? error : ""), (error ? "\n" : ""), argv[0],
-    strlen(argv[0]), SPACES,
-    strlen(argv[0]), SPACES,
-    argv[0],
-    strlen(argv[0]), SPACES,
-    argv[0]);
+    (int)(strlen(argv[0])), SPACES,
+    (int)(strlen(argv[0])), SPACES, argv[0],
+    (int)(strlen(argv[0])), SPACES, argv[0]);
     return EC_PARAMS;
 }
 
@@ -60,6 +58,16 @@ ddmode parse_dd(char* dd)
 
 int main(int argc, char** argv)
 {
+    b58_sha256_impl = calc_sha_256; 
+    if (sodium_init() < 0) {
+        fprintf(stderr, "Could not init libsodium\n");
+        return EC_SODIUM;
+    }
+
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_ssl_algorithms();
+
     if (argc < 4)
     {
         print_usage(argc, argv, 0);
@@ -201,9 +209,9 @@ int main(int argc, char** argv)
     // build subscriber.sock path
     char subscriber_path[PATH_MAX]; memset(subscriber_path, 0, PATH_MAX);
     {
-        strcpy(subscriber_path, sock_path, sizeof(subscriber_path) - 1);
-        strcat(subscriber_path, "/", sizeof(subscriber_path) - 1);
-        strcat(subscriber_path, SUBSCRIBER_FN, sizeof(subscriber_path) - 1);
+        strncpy(subscriber_path, sock_path, sizeof(subscriber_path) - 1);
+        strncat(subscriber_path, "/", sizeof(subscriber_path) - 1);
+        strncat(subscriber_path, SUBSCRIBER_FN, sizeof(subscriber_path) - 1);
     }
 
     // ensure db path exists
@@ -270,15 +278,6 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        if (sodium_init() < 0) {
-            fprintf(stderr, "Could not init libsodium\n");
-            return EC_SODIUM;
-        }
-
-        SSL_library_init();
-        SSL_load_error_strings();
-        OpenSSL_add_ssl_algorithms();
-
         return peer_mode(ip, port, peer_path, key, dd_default, dd_specific);
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max > 1)
