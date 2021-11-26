@@ -1,10 +1,10 @@
 #include "uplink.h"
 
 #define SPACES \
-"                                                                                                                    "    
+"                                                                                                                    "
 int print_usage(int argc, char** argv, const char* error)
 {
-    fprintf(stderr, 
+    fprintf(stderr,
     "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s"
     "An XRPL peer-protocol endpoint for connecting local subscribers (applications) to the XRPL mesh network.\n"
     "Main-mode:\n"
@@ -38,9 +38,9 @@ int print_usage(int argc, char** argv, const char* error)
     VERSION, (error ? error : ""), (error ? "\n" : ""), argv[0],
     strlen(argv[0]), SPACES,
     strlen(argv[0]), SPACES,
-    argv[0], 
+    argv[0],
     strlen(argv[0]), SPACES,
-    argv[0]); 
+    argv[0]);
     return EC_PARAMS;
 }
 
@@ -60,37 +60,6 @@ ddmode parse_dd(char* dd)
 
 int main(int argc, char** argv)
 {
-/*
-#define TEST_HASH(x)\
-    { \
-        Hash h = hash(x, strlen(x));\
-        printf("%.*s: ", 32, x);\
-        for (int i = 0; i < 32; ++i)\
-            printf("%02x", (unsigned char)(h.b[i]));\
-        printf("\n");\
-    }
-    TEST_HASH("hello world");
-    TEST_HASH("hello world");
-    TEST_HASH(
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world");
-
-    TEST_HASH(
-            "hello world hell1 world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world hello world "
-            "hello world hello world hello world");
-   
-    return 0;
-*/
     if (argc < 4)
     {
         print_usage(argc, argv, 0);
@@ -120,7 +89,7 @@ int main(int argc, char** argv)
     char sock_path[PATH_MAX]; memset(sock_path, 0, PATH_MAX);
     char db_path[PATH_MAX];   memset(db_path, 0, PATH_MAX);
     char key_path[PATH_MAX];  memset(key_path, 0, PATH_MAX);
-    
+
     // parse dds and remaining arguments
     {
         for (int i = 5; i < argc; ++i)
@@ -152,7 +121,7 @@ int main(int argc, char** argv)
                             "sockdir specified more than once");
                         return EC_PARAMS;
                     }
-                    
+
                     strcpy(sock_path, ddtype);
                 }
                 else if (strcmp(pktype, "dbdir") == 0)
@@ -205,7 +174,7 @@ int main(int argc, char** argv)
                 }
             }
         }
-    }    
+    }
 
     if (db_path[0] == 0)
         strncpy(db_path, DEFAULT_DB_PATH, sizeof(db_path) - 1);
@@ -220,7 +189,7 @@ int main(int argc, char** argv)
         strncat(key_path, "/", sizeof(key_path) - 1);
         strncat(key_path, KEY_FN, sizeof(key_path) - 1);
     }
-    
+
     // build peer.sock path
     char peer_path[PATH_MAX]; memset(peer_path, 0, PATH_MAX);
     {
@@ -236,7 +205,7 @@ int main(int argc, char** argv)
         strcat(subscriber_path, "/", sizeof(subscriber_path) - 1);
         strcat(subscriber_path, SUBSCRIBER_FN, sizeof(subscriber_path) - 1);
     }
-    
+
     // ensure db path exists
     if (!(mkdir(db_path, 0700) == 0 || errno == EEXIST))
     {
@@ -295,12 +264,20 @@ int main(int argc, char** argv)
         close(rnd);
         close(fd);
     }
-    
+
     int peer_max = 0;
 
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
+        if (sodium_init() < 0) {
+            fprintf(stderr, "Could not init libsodium\n");
+            return EC_SODIUM;
+        }
+
+        SSL_library_init();
+        SSL_load_error_strings();
+        OpenSSL_add_ssl_algorithms();
 
         return peer_mode(ip, port, peer_path, key, dd_default, dd_specific);
     }

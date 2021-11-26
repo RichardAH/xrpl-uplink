@@ -20,7 +20,7 @@
 #include <stdint.h>
 #include <map>
 #include <nmmintrin.h>
-
+#include <sodium.h>
 
 typedef union hash_ {
     uint8_t b[32];
@@ -39,12 +39,14 @@ enum ddmode : int8_t
 
 enum ercode : int
 {
-    EC_GENERIC = 1,     // a sanity check failed
-    EC_PARAMS = 2,      // there was a problem with the params passed on cmdline
-    EC_TCP = 3,         // there was a tcp socket issue (creating, connecting)
-    EC_UNIX = 4,        // there was a unix sock  issue (creating, connecting)
-    EC_SPAWN = 5,       // could not fork exec
-    EC_SSL = 6          // there was a problem with an openssl routine
+    EC_GENERIC  = 1,    // a sanity check failed
+    EC_PARAMS   = 2,    // there was a problem with the params passed on cmdline
+    EC_TCP      = 3,    // there was a tcp socket issue (creating, connecting)
+    EC_UNIX     = 4,    // there was a unix sock  issue (creating, connecting)
+    EC_SPAWN    = 5,    // could not fork exec
+    EC_SSL      = 6,    // there was a problem with an openssl routine
+    EC_POLL     = 7,    // poll returned abnormally
+    EC_SODIUM   = 8     // problem loading or calling libsodium
 
 };
 
