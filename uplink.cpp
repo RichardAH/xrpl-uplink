@@ -5,7 +5,7 @@
 int print_usage(int argc, char** argv, const char* error)
 {
     fprintf(stderr,
-    "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s"
+    "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s%s%s"
     "An XRPL peer-protocol endpoint for connecting local subscribers (applications) to the XRPL mesh network.\n"
     "Main-mode:\n"
     "\tThe process that subscribers connect to. Maintains a swarm of peer mode processes up to max-peers\n"
@@ -35,7 +35,12 @@ int print_usage(int argc, char** argv, const char* error)
     "\tmtTRANSACTIONS\n"
     "Example:\n"
     "       %s 10 r.ripple.com 51235 all mtGET_LEDGER:none\n",
-    VERSION, (error ? error : ""), (error ? "\n" : ""), argv[0],
+    VERSION, 
+    (error ? "\n" : ""), 
+    (error ? "\u001b[31mError: " : ""),
+    (error ? error : ""), 
+    (error ? "\u001b[30m\n\n" : ""), 
+    argv[0],
     (int)(strlen(argv[0])), SPACES,
     (int)(strlen(argv[0])), SPACES, argv[0],
     (int)(strlen(argv[0])), SPACES, argv[0]);
@@ -74,7 +79,37 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
-    char* ip = argv[2];
+    uint32_t ip[4];
+    char host[256]; host[sizeof(host) - 1] = '\0';
+    strncpy(host, argv[2], sizeof(host) - 1);
+
+    printf("host prelookup: %s\n", host);
+
+    // check for valid ipv4 address and perform nslookup
+    if (sscanf(host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
+        ip[0] > 255 || ip[1] > 255 || ip[2] > 255 || ip[3] > 255)
+    {
+        struct hostent* hn = gethostbyname(host);
+        if (!hn)
+        {
+            print_usage(argc, argv, "invalid IP/hostname (IPv4 ONLY)");
+            return EC_ADDR;
+        }
+       
+        struct in_addr** addr_list = (struct in_addr **)hn->h_addr_list;
+        char* new_host = inet_ntoa(*addr_list[0]);
+        if (sscanf(new_host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
+            ip[0] > 255 || ip[1] > 255 || ip[2] > 255 || ip[3] > 255)
+        {
+            print_usage(argc, argv, "invalid IP after resolving hostname (IPv4 ONLY)");
+            return EC_ADDR;
+        }
+
+        strncpy(host, new_host, sizeof(host) - 1);
+    }
+
+    printf("host postlookup: %s\n", host);
+
     int port = 0;
     if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
     {
@@ -278,9 +313,9 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(ip, port, peer_path, key, dd_default, dd_specific);
+        return peer_mode(host, port, peer_path, key, dd_default, dd_specific);
     }
-    else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max > 1)
+    else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max >= 1)
     {
         // main mode
 
@@ -290,7 +325,7 @@ int main(int argc, char** argv)
             if (strcmp(sock_path, DEFAULT_SOCK_PATH) == 0)
             {
                 // all our FDs are close on exec
-                execlp(argv[0], argv[0], "connect", argv[2], argv[3], (char*)0);
+                execlp(argv[0], argv[0], "connect", host, argv[3], (char*)0);
             }
             else
             {
@@ -308,7 +343,7 @@ int main(int argc, char** argv)
         }
 
         // continue to main mode
-        return main_mode(ip, port, peer_max, peer_path, subscriber_path, db_path, key, dd_default, dd_specific);
+        return main_mode(host, port, peer_max, peer_path, subscriber_path, db_path, key, dd_default, dd_specific);
     }
     else
     {

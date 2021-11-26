@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include "sha-256.h"
 #include "libbase58.h"
 
@@ -57,7 +58,8 @@ enum ercode : int
     EC_POLL         = 7,    // poll returned abnormally
     EC_SODIUM       = 8,    // problem loading or calling libsodium
     EC_SECP256K1    = 9,    // problem with a libsecp256k1 call
-    EC_BUFFER      = 10     // internal buffer was insufficiently large for an operation
+    EC_BUFFER      = 10,    // internal buffer was insufficiently large for an operation
+    EC_ADDR        = 11     // invalid address or hostname specified / could not resolve
 
 };
 

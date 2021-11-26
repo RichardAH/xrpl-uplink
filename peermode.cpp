@@ -9,8 +9,8 @@
 #define POLL_TIMEOUT 2000 /* ms */
 #define DEFAULT_BUF_SIZE 64
 
-#define DEBUG 0
-#define VERBOSE_DEBUG 0
+#define DEBUG 1
+#define VERBOSE_DEBUG 1
 #define HTTP_BUFFER_SIZE 4096
 #define SSL_BUFFER_LENGTH 65536
 
@@ -184,7 +184,7 @@ int peer_mode(
 
         if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could parse ip %s while trying to connect to peer\n",
+            fprintf(stderr, "[%s:%d pid=%d] Could not parse ip %s while trying to connect to peer\n",
                     __FILE__, __LINE__, my_pid, ip);
             return EC_TCP;
         }
@@ -216,8 +216,8 @@ int peer_mode(
         // connect
         if (connect(main_fd, (const struct sockaddr*)&addr, sizeof(addr)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not connect to peer %s:%d\n", 
-                    __FILE__, __LINE__, my_pid, ip, port);
+            fprintf(stderr, "[%s:%d pid=%d] Could not connect to main unix domain socket %s\n", 
+                    __FILE__, __LINE__, my_pid, main_path);
             return EC_UNIX;
         }
     }
@@ -305,6 +305,10 @@ int peer_mode(
     fdset[1].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN ;
    
     int connection_upgraded = 0;
+
+    if (DEBUG)
+        fprintf(stderr, "[%s:%d pid=%d] Starting poll loop for peer %s\n",
+                __FILE__, __LINE__, my_pid, ip);
 
     // primary poll loop
     while(1)
