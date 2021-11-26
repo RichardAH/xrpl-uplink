@@ -55,7 +55,7 @@ int create_unix_accept(char* path)
     if ((fd = socket(AF_UNIX, SOCK_SEQPACKET, 0)) == -1)
     {
         fprintf(stderr, "Could not create unix domain socket: %d\n", errno);
-        return -1;
+        return -EC_UNIX;
     }
   
     server_sockaddr.sun_family = AF_UNIX;   
@@ -66,7 +66,7 @@ int create_unix_accept(char* path)
     if (bind(fd, (struct sockaddr *) &server_sockaddr, len) == -1)
     {
         fprintf(stderr, "Could not bind to unix domain socket: %d\n", errno);
-        return -1;
+        return -EC_UNIX;
     }
 
     return fd;

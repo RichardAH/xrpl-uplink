@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <stdint.h>
 #include <map>
+#include <set>
 #include <nmmintrin.h>
 #include <sodium.h>
 #include <netinet/in.h>
@@ -29,7 +30,6 @@
 #include <netdb.h>
 #include "sha-256.h"
 #include "libbase58.h"
-
 
 typedef union hash_ {
     uint8_t b[32];

@@ -14,8 +14,6 @@
 #define HTTP_BUFFER_SIZE 4096
 #define SSL_BUFFER_LENGTH 65536
 
-pid_t my_pid = 0;
-
 // ---------
 // PEER MODE
 // ---------
@@ -23,6 +21,8 @@ pid_t my_pid = 0;
 // In this file: peer refers to TCP endpoint connecting out to the XRPL node.
 // RH NOTE: `peer_path` (uplink.cpp) == `main_path` (peermode.cpp)
 //           typically: /var/run/xrpl-uplink/peer.sock
+
+inline pid_t my_pid;
 
 int generate_node_keys(
     secp256k1_context* ctx,
@@ -156,9 +156,6 @@ int peer_mode(
     char* ip, int port, char* main_path, uint8_t* key, 
     ddmode dd_default, std::map<int32_t, ddmode>& dd_specific)
 {
-
-    // global
-    my_pid = getpid();
 
     // create secp256k1 context
     secp256k1_context* secp256k1ctx = secp256k1_context_create(
