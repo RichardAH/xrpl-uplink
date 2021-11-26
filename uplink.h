@@ -37,6 +37,17 @@ enum ddmode : int8_t
     DD_PEER = 3
 };
 
+enum ercode : int
+{
+    EC_GENERIC = 1,     // a sanity check failed
+    EC_PARAMS = 2,      // there was a problem with the params passed on cmdline
+    EC_TCP = 3,         // there was a tcp socket issue (creating, connecting)
+    EC_UNIX = 4,        // there was a unix sock  issue (creating, connecting)
+    EC_SPAWN = 5,       // could not fork exec
+    EC_SSL = 6          // there was a problem with an openssl routine
+
+};
+
 int fd_set_flags(int fd, int new_flags);
 int create_unix_accept(char* path);
 int32_t packet_id(char* packet_name);

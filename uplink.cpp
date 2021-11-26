@@ -41,7 +41,7 @@ int print_usage(int argc, char** argv, const char* error)
     argv[0], 
     strlen(argv[0]), SPACES,
     argv[0]); 
-    return 1;
+    return EC_PARAMS;
 }
 
 ddmode parse_dd(char* dd)
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
     if (argc < 4)
     {
         print_usage(argc, argv, 0);
-        return 1;
+        return EC_PARAMS;
     }
 
     char* ip = argv[2];
@@ -102,7 +102,7 @@ int main(int argc, char** argv)
     if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
     {
         print_usage(argc, argv, "port must be a number between 1 and 65535 inclusive");
-        return 1;
+        return EC_PARAMS;
     }
 
     ddmode dd_default = DD_ALL;
@@ -112,14 +112,14 @@ int main(int argc, char** argv)
     if (dd_default == DD_INVALID)
     {
         print_usage(argc, argv, "default de-duplication mode may only be one of: all, none, sub, peer.");
-        return 1;
+        return EC_PARAMS;
     }
 
     std::map<int32_t, ddmode> dd_specific; // packet_type => de-duplication mode
 
-    char sock_path[PATH_MAX];   sock_path[0] = '\0';
-    char db_path[PATH_MAX];     db_path[0] = '\0';
-    char key_path[PATH_MAX];    key_path[0] = '\0';
+    char sock_path[PATH_MAX]; memset(sock_path, 0, PATH_MAX);
+    char db_path[PATH_MAX];   memset(db_path, 0, PATH_MAX);
+    char key_path[PATH_MAX];  memset(key_path, 0, PATH_MAX);
     
     // parse dds and remaining arguments
     {
@@ -136,7 +136,7 @@ int main(int argc, char** argv)
             {
                 print_usage(argc, argv,
                     "invalid argment expecting packet:ddmode or sockdir=path or dbdir=path");
-                return 1;
+                return EC_PARAMS;
             }
 
             for (++x; *x != '\0' && (dd - ddtype < (PATH_MAX-1)); *dd++ = *x++);
@@ -150,7 +150,7 @@ int main(int argc, char** argv)
                     {
                         print_usage(argc, argv,
                             "sockdir specified more than once");
-                        return 1;
+                        return EC_PARAMS;
                     }
                     
                     strcpy(sock_path, ddtype);
@@ -161,13 +161,13 @@ int main(int argc, char** argv)
                     {
                         print_usage(argc, argv,
                             "dbdir specified more than once");
-                        return 1;
+                        return EC_PARAMS;
                     }
                     if (strcmp(argv[1], "connect") == 0)
                     {
                         print_usage(argc, argv,
                             "cannot specify dbdir in peer (connect) mode");
-                        return 1;
+                        return EC_PARAMS;
                     }
                     strcpy(db_path, ddtype);
                 }
@@ -177,7 +177,7 @@ int main(int argc, char** argv)
                     {
                         print_usage(argc, argv,
                             "keyfile specified more than once");
-                        return 1;
+                        return EC_PARAMS;
                     }
                     strcpy(key_path, ddtype);
                 }
@@ -185,7 +185,7 @@ int main(int argc, char** argv)
                 {
                     print_usage(argc, argv,
                         "invalid argument expecting sockdir=path or dbdir=path");
-                    return 1;
+                    return EC_PARAMS;
                 }
             }
             else
@@ -201,37 +201,60 @@ int main(int argc, char** argv)
                 {
                     print_usage(argc, argv,
                         "invalid specific de-duplication specified... check allowable dd/packet types.");
-                    return 1;
+                    return EC_PARAMS;
                 }
             }
         }
     }    
 
     if (db_path[0] == 0)
-        strcpy(db_path, DEFAULT_DB_PATH);
+        strncpy(db_path, DEFAULT_DB_PATH, sizeof(db_path) - 1);
 
     if (sock_path[0] == 0)
-        strcpy(sock_path, DEFAULT_SOCK_PATH);
+        strncpy(sock_path, DEFAULT_SOCK_PATH, sizeof(sock_path) - 1);
 
+    // build keyfile path
     if (key_path[0] == 0)
     {
-        strcpy(key_path, DEFAULT_DB_PATH);
-        strcat(key_path, "/");
-        strcat(key_path, KEY_FN);
+        strncpy(key_path, DEFAULT_DB_PATH, sizeof(key_path) - 1);
+        strncat(key_path, "/", sizeof(key_path) - 1);
+        strncat(key_path, KEY_FN, sizeof(key_path) - 1);
     }
     
-    // ensure socket path exists
-    if (!(mkdir(sock_path, 0700) == 0 || errno == EEXIST))
+    // build peer.sock path
+    char peer_path[PATH_MAX]; memset(peer_path, 0, PATH_MAX);
     {
-        fprintf(stderr, "Could not create/access directory: `%s` for socket files\n", sock_path);
-        return 1;
+        strncpy(peer_path, sock_path, sizeof(peer_path) - 1);
+        strncat(peer_path, "/", sizeof(peer_path) - 1);
+        strncat(peer_path, PEER_FN, sizeof(peer_path) - 1);
     }
 
+    // build subscriber.sock path
+    char subscriber_path[PATH_MAX]; memset(subscriber_path, 0, PATH_MAX);
+    {
+        strcpy(subscriber_path, sock_path, sizeof(subscriber_path) - 1);
+        strcat(subscriber_path, "/", sizeof(subscriber_path) - 1);
+        strcat(subscriber_path, SUBSCRIBER_FN, sizeof(subscriber_path) - 1);
+    }
+    
     // ensure db path exists
     if (!(mkdir(db_path, 0700) == 0 || errno == EEXIST))
     {
         fprintf(stderr, "Could not create/access directory: `%s` for database files\n", db_path);
-        return 1;
+        return EC_PARAMS;
+    }
+
+    // build peer.db path
+    {
+        strncat(db_path, "/", sizeof(db_path) - 1);
+        strncat(db_path, DB_FN, sizeof(db_path) - 1);
+    }
+
+    // ensure socket path exists
+    if (!(mkdir(sock_path, 0700) == 0 || errno == EEXIST))
+    {
+        fprintf(stderr, "Could not create/access directory: `%s` for socket files\n", sock_path);
+        return EC_PARAMS;
     }
 
     // load the private key or create specified keyfile if it doesn't already exist
@@ -242,7 +265,7 @@ int main(int argc, char** argv)
         if (fd < 0 || read(fd, key, 32) != 32)
         {
             fprintf(stderr, "Could not open keyfile %s for reading\n", key_path);
-            return 1;
+            return EC_PARAMS;
         }
         close(fd);
     }
@@ -255,19 +278,19 @@ int main(int argc, char** argv)
         if (fd < 0)
         {
             fprintf(stderr, "Could not open keyfile %s for writing\n", key_path);
-            return 1;
+            return EC_PARAMS;
         }
         int rnd = open("/dev/urandom", O_RDONLY);
         if (rnd < 0 || read(rnd, key, 32) != 32) // RH TODO: not every random 32 byte seq is a valid secp256k1 key
         {
             fprintf(stderr, "Could read /dev/urandom to generate key\n");
-            return 1;
+            return EC_PARAMS;
         }
 
         if (write(fd, key, 32) !=32)
         {
             fprintf(stderr, "Could not write key to keyfile %s\n", key_path);
-            return 1;
+            return EC_PARAMS;
         }
         close(rnd);
         close(fd);
@@ -278,18 +301,12 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(ip, port, sock_path, key, dd_default, dd_specific);
+
+        return peer_mode(ip, port, peer_path, key, dd_default, dd_specific);
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max > 1)
     {
         // main mode
-
-        // ensure the db path exists
-        if (!(mkdir(db_path, 0700) == 0 || errno == EEXIST))
-        {
-            fprintf(stderr, "Could not create directory: `%s` for database files\n", db_path);
-            return 1;
-        }
 
         // spawn first peer before continuing to main mode
         if (fork() == 0)
@@ -311,16 +328,16 @@ int main(int argc, char** argv)
 
             // should be unreachable
             fprintf(stderr, "Execlp failed, could not spawn peer process\n");
-            return 10;
+            return EC_SPAWN;
         }
 
         // continue to main mode
-        return main_mode(ip, port, peer_max, sock_path, db_path, key, dd_default, dd_specific);
+        return main_mode(ip, port, peer_max, peer_path, subscriber_path, db_path, key, dd_default, dd_specific);
     }
     else
     {
         print_usage(argc, argv, "max-peers must be at least 1");
-        return 1;
+        return EC_PARAMS;
     }
 
 }

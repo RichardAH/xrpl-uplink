@@ -7,7 +7,7 @@
 
 int main_mode(
         char* ip, int port, int peer_max,
-        char* sock_path, char* db_path, uint8_t* key,
+        char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<int32_t, ddmode>& dd_specific)
 {
     // task 1: open /var/run/xrpl-uplink/peer.sock accept mode
