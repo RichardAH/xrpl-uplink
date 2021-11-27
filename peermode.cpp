@@ -13,7 +13,8 @@
 #define VERBOSE_DEBUG 1
 #define HTTP_BUFFER_SIZE 4096
 #define SSL_BUFFER_SIZE 65536
-#define PACKET_BUFFER_SIZE 67108864
+#define PACKET_BUFFER_NORM 65536
+#define PACKET_BUFFER_MAX  67108864
 
 // ---------
 // PEER MODE
@@ -280,17 +281,22 @@ int peer_mode(
 
     // these buffers are used to store a whole packet for processing
     uint8_t* packet_buffer = 
-        (uint8_t*)(malloc(PACKET_BUFFER_SIZE));
+        (uint8_t*)(malloc(PACKET_BUFFER_NORM));
+    
+    if (!packet_buffer)
+    {
+        fprintf(stderr, "[%s:%d pid=%d] Malloc failed while creating packet_buffer\n",
+            __FILE__, __LINE__, my_pid);
+        return EC_BUFFER;
+    }
+
+    size_t packet_buffer_len = PACKET_BUFFER_NORM;
 
     int packet_type = -1;               // type of the current packet we're receiving
     uint32_t packet_uncompressed = 0;   // uncompressed size of the current packet or 0 if already uncompressed
     uint32_t packet_expected = 0;       // expected bytes
     uint32_t packet_received = 0;       // received bytes
 
-    /*
-    uint8_t* temp_buffer = 
-        (uint8_t*)(malloc(PACKET_BUFFER_SIZE));
-    */
 
     #define SSL_FAILED(x) (\
         (x) != SSL_ERROR_WANT_WRITE &&\
@@ -670,6 +676,47 @@ int peer_mode(
                         return EC_SSL;
                     }
 
+                    // upgrade to a larger buffer if needed
+                    if (packet_expected > packet_buffer_len)
+                    {
+                        if (packet_expected <= PACKET_BUFFER_MAX)
+                        {
+                            free(packet_buffer);
+                            packet_buffer_len = PACKET_BUFFER_MAX;
+                            packet_buffer = (uint8_t*)malloc(packet_buffer_len);
+                            if (!packet_buffer)
+                            {
+                                fprintf(stderr, "[%s:%d pid=%d] Malloc failed while upsizing packet_buffer\n",
+                                    __FILE__, __LINE__, my_pid);
+                                return EC_BUFFER;
+                            }
+                        }
+                        else
+                        {
+                            fprintf(stderr, "[%s:%d pid=%d] "
+                                    "Received a packet which exceeds maximum buffer size. "
+                                    "buffer_size=%d packet_size=%d packet_type=%d\n",
+                                    __FILE__, __LINE__, my_pid,
+                                    PACKET_BUFFER_MAX, packet_expected, packet_type);
+                            return EC_BUFFER;
+                        }
+                    }
+                    else if (packet_expected <= PACKET_BUFFER_NORM && packet_buffer_len > PACKET_BUFFER_NORM)
+                    {
+                        // downgrade to the smaller buffer
+                        free(packet_buffer);
+                        packet_buffer_len = PACKET_BUFFER_NORM;
+                        packet_buffer = (uint8_t*)malloc(packet_buffer_len);
+                        if (!packet_buffer)
+                        {
+                            fprintf(stderr, "[%s:%d pid=%d] Malloc failed while downsizing packet_buffer\n",
+                                __FILE__, __LINE__, my_pid);
+                            return EC_BUFFER;
+                        }
+                    }
+
+              
+
                     // now we're ready to drop through to a payload read
                 } while (0);
 
@@ -697,7 +744,7 @@ int peer_mode(
                 size_t bytes_read = 0;
                 while (remaining > 0 && (rc =
                     SSL_read_ex(ssl, packet_buffer + remaining, 
-                    PACKET_BUFFER_SIZE - packet_received, &bytes_read) > 0) &&
+                    packet_buffer_len - packet_received, &bytes_read) > 0) &&
                     bytes_read > 0)
                 {
                     packet_received += bytes_read;
@@ -741,45 +788,3 @@ int peer_mode(
     }
     return 0;
 }
-
-/*
-
-                    if (compressed)
-                    {
-                        // RH TODO: decompress packet before handoff(lz4)
-                        fprintf(stderr, "[%s:%d pid=%d] "
-                                "FIXME Compressed packets currently unsupported, dropping\n",
-                            __FILE__, __LINE__, my_pid);
-
-                        continue;
-                    } 
-
-                    printf("payload_size + headersize = %d, packet_buffer_size = %d\n", 
-                            payload_size + header_size,
-                            PACKET_BUFFER_SIZE);
-                    if (payload_size + header_size <= PACKET_BUFFER_SIZE)
-                    {
-                        if (DEBUG && VERBOSE_DEBUG)
-                            fprintf(stderr, "[%s:%d pid=%d] Reading packet "
-                                    "compressed: %s "
-                                    "csize: %d "
-                                    "usize: %d\n",
-                                __FILE__, __LINE__, my_pid,
-                                compressed ? payload_size : 0, uncompressed_size);
-
-                        if ((rc = SSL_read_ex(ssl, packet_buffer, payload_size + header_size, &bytes_read)) > 0
-                                && bytes_read == payload_size + header_size)
-                        {
-                            route_to_subscribers(
-                                packet_type,
-                                packet_buffer,
-                                uncompressed_size);
-                        }
-                        else
-                        {
-                            fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during packet read\n",
-                                __FILE__, __LINE__, my_pid, SSL_get_error(ssl, rc));
-                            return EC_SSL;
-                        }
-                    }
-                    */
