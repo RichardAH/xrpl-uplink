@@ -50,4 +50,6 @@ offset | size | field
 64|32|peer from (may be null when subscriber sends)
 96|32|peer to ^
 total|128|
+
+
 ^ peer to may be null to send to all peers, or it may be a mask as determined by flags
