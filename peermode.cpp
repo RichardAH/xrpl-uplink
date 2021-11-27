@@ -144,8 +144,8 @@ int generate_upgrade(
     }
     else
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not create upgrade request, buffer too small.\n",
-                __FILE__, __LINE__, my_pid);
+        fprintf(stderr, "[%s:%d pid=%d] Could not create upgrade request, buffer too small. Wrote=%d Buflen=%d.\n",
+                __FILE__, __LINE__, my_pid, bytes_written, *buflen);
         *buflen = 0;
         return EC_BUFFER;
     }
@@ -156,6 +156,8 @@ int peer_mode(
     char* ip, int port, char* main_path, uint8_t* key, 
     ddmode dd_default, std::map<int32_t, ddmode>& dd_specific)
 {
+
+    my_pid = getpid();
 
     // create secp256k1 context
     secp256k1_context* secp256k1ctx = secp256k1_context_create(
@@ -290,6 +292,8 @@ int peer_mode(
     wbio = BIO_new(BIO_s_mem()); /* SSL writes to, we read from. */
     SSL_set_bio(ssl, rbio, wbio);
 
+    SSL_connect(ssl);
+    SSL_FLUSH_OUT();
 
     // setup poll
     struct pollfd fdset[2];
@@ -313,7 +317,7 @@ int peer_mode(
 
         fdset[0].events &= ~POLLOUT;
 
-        if (ssl_write_len > 0)
+        if (ssl_write_len > 0 || !SSL_is_init_finished(ssl))
             fdset[0].events |= POLLOUT;
 
         int poll_result = poll(&fdset[0], 2, POLL_TIMEOUT);
@@ -391,7 +395,8 @@ int peer_mode(
         {
 
             if (DEBUG && VERBOSE_DEBUG)
-                fprintf(stderr, "[%s:%d pid=%d] incoming data\n", __FILE__, __LINE__, my_pid);
+                fprintf(stderr, "[%s:%d pid=%d] incoming data - connection_upgraded: %d\n",
+                        __FILE__, __LINE__, my_pid, connection_upgraded);
 
             ssize_t bytes_read = read(peer_fd, ssl_buf, sizeof(ssl_buf));
             if (bytes_read <= 0)
@@ -428,7 +433,7 @@ int peer_mode(
             {
                 //int generate_upgrade(SSL* ssl, char* keyin, char* bufout, int buflen)
                 char upgrade_request[HTTP_BUFFER_SIZE];
-                int len = 0;
+                int len = sizeof(upgrade_request);
                 int rc = generate_upgrade(secp256k1ctx, ssl, key, upgrade_request, &len);
                 if (rc != EC_SUCCESS)
                     return rc;
@@ -449,10 +454,14 @@ int peer_mode(
 
             if (connection_upgraded == 1)
             {
+                printf("trying peek\n");
+
                 char buffer[HTTP_BUFFER_SIZE];
                 size_t bytes_read = 0;
-                if (SSL_peek_ex(ssl, buffer, sizeof(buffer), &bytes_read))
+                int rc = -1;
+                if ((rc = SSL_peek_ex(ssl, buffer, sizeof(buffer), &bytes_read)) > 0)
                 {
+                    printf("peek: `%.*s`\n", bytes_read, buffer);
                     for (int i = 0; i < bytes_read - 4; ++i)
                     {
                         // looking for \r\n\r\n
@@ -474,6 +483,11 @@ int peer_mode(
                             break;
                         }
                     }
+                }
+                else
+                {
+                    //int SSL_get_error(const SSL *ssl, int ret);
+                    printf("peek failed: rc=%d, SSL_get_error=%d\n", rc, SSL_get_error(ssl, rc));
                 }
             }
 

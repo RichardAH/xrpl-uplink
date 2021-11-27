@@ -1,6 +1,6 @@
 #include "uplink.h"
 
-
+#define ACCEPT_QUEUE 10
 // ---------
 // MAIN MODE
 // ---------
@@ -34,8 +34,13 @@ int main_mode(
                 __FILE__, __LINE__, my_pid);
             return EC_UNIX;
         }
-        
-        // todo: listen() call here
+       
+        if (listen(peer_accept, ACCEPT_QUEUE) == -1)
+        {
+            fprintf(stderr, "[%s:%d pid=%d] Could not call listen on peer_accept unix domain socket\n",
+                __FILE__, __LINE__, my_pid);
+            return EC_UNIX;
+        } 
     }
 
 
@@ -57,8 +62,12 @@ int main_mode(
             return EC_UNIX;
         }
 
-        // todo: listen() call here
-
+        if (listen(subscriber_accept, ACCEPT_QUEUE) == -1)
+        {
+            fprintf(stderr, "[%s:%d pid=%d] Could not call listen on subscriber_accept unix domain socket\n",
+                __FILE__, __LINE__, my_pid);
+            return EC_UNIX;
+        } 
     }
 
 
