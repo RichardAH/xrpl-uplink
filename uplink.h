@@ -31,11 +31,20 @@
 #include "sha-256.h"
 #include "libbase58.h"
 
-typedef union hash_ {
+typedef union hash_
+{
     uint8_t b[32];
     uint32_t d[8];
     uint64_t q[4];
 } Hash;
+
+struct HashComparator
+{
+    bool operator()(const Hash& lhs, const Hash& rhs) const
+    {
+        return memcmp(&lhs, &rhs, 32) < 0;
+    }
+};
 
 enum ddmode : int8_t 
 {
@@ -76,4 +85,4 @@ int main_mode(
     char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
     ddmode dd_default, std::map<int32_t, ddmode>& dd_specific);
 
-Hash hash(const void* mem, int len);
+Hash hash(int bias, const void* mem, int len);

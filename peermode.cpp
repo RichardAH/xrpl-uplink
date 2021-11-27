@@ -10,9 +10,10 @@
 #define DEFAULT_BUF_SIZE 64
 
 #define DEBUG 1
-#define VERBOSE_DEBUG 0
+#define VERBOSE_DEBUG 1
 #define HTTP_BUFFER_SIZE 4096
-#define SSL_BUFFER_LENGTH 65536
+#define SSL_BUFFER_SIZE 65536
+#define PACKET_BUFFER_SIZE 67108864
 
 // ---------
 // PEER MODE
@@ -23,6 +24,44 @@
 //           typically: /var/run/xrpl-uplink/peer.sock
 
 inline pid_t my_pid;
+
+std::map<Hash, uint64_t, HashComparator> seen_p2s;
+
+#define print_hash(h, before, after)\
+{\
+    fprintf(stderr, "%s%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X"\
+                    "%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%s",\
+                    before,\
+               h.b[0], h.b[1], h.b[2], h.b[3], h.b[4], h.b[5], h.b[6], h.b[7],\
+               h.b[8], h.b[9], h.b[10], h.b[11], h.b[12], h.b[13], h.b[14], h.b[15],\
+               h.b[16], h.b[17], h.b[18], h.b[19], h.b[20], h.b[21], h.b[22], h.b[23],\
+               h.b[24], h.b[25], h.b[26], h.b[27], h.b[28], h.b[29], h.b[30], h.b[31], after);\
+}
+
+int route_to_subscribers(int packet_type, uint8_t* packet_buffer, int size)
+{
+
+    Hash h = hash(packet_type, packet_buffer, size);
+
+    int seen_before = 0;    
+    if (seen_p2s.find(h) == seen_p2s.end())
+        seen_p2s.emplace(h, 1);
+    else
+        seen_before = 1;
+
+    if (DEBUG)
+    {
+        fprintf(stderr, "[%s:%d pid=%d] Packet route_to_subscribers type=%d size=%d ",
+               __FILE__, __LINE__, my_pid, packet_type, size);
+
+        print_hash(h, (seen_before ? "seen=" : "hash="), "\n");
+    }
+
+
+
+
+    return EC_SUCCESS;
+}
 
 int generate_node_keys(
     secp256k1_context* ctx,
@@ -237,7 +276,21 @@ int peer_mode(
     size_t ssl_write_len = 0;
     char*  ssl_encrypt_buf = 0;
     size_t ssl_encrypt_len = 0;
-    char ssl_buf[SSL_BUFFER_LENGTH];
+    char ssl_buf[SSL_BUFFER_SIZE];
+
+    // these buffers are used to store a whole packet for processing
+    uint8_t* packet_buffer = 
+        (uint8_t*)(malloc(PACKET_BUFFER_SIZE));
+
+    int packet_type = -1;               // type of the current packet we're receiving
+    uint32_t packet_uncompressed = 0;   // uncompressed size of the current packet or 0 if already uncompressed
+    uint32_t packet_expected = 0;       // expected bytes
+    uint32_t packet_received = 0;       // received bytes
+
+    /*
+    uint8_t* temp_buffer = 
+        (uint8_t*)(malloc(PACKET_BUFFER_SIZE));
+    */
 
     #define SSL_FAILED(x) (\
         (x) != SSL_ERROR_WANT_WRITE &&\
@@ -318,6 +371,9 @@ int peer_mode(
     while(1)
     {
 
+        SSL_FLUSH_OUT();
+
+        // check if there are enqueued bytes ready to be encrypted
         while (ssl_encrypt_len > 0) 
         {
             int bytes_written = SSL_write(ssl, ssl_encrypt_buf, ssl_encrypt_len);
@@ -345,10 +401,10 @@ int peer_mode(
         }
 
 
+        // setup and execute poll such that a free outgoing buffer will trigger if we have pending bytes to write out        
         fdset[0].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN | 
             (ssl_write_len > 0  ? POLLOUT : 0);
         fdset[1].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN ;
-
         int poll_result = poll(&fdset[0], 2, POLL_TIMEOUT);
 
         if (poll_result < 0)
@@ -419,7 +475,7 @@ int peer_mode(
                     __FILE__, __LINE__, my_pid, ssl_write_len);
         }        
 
-        // check if there are incoming bytes
+        // check if there are incoming bytes from TCP
         if (fdset[0].revents & POLLIN)
         {
 
@@ -439,9 +495,9 @@ int peer_mode(
                 {
                     fprintf(stderr, "[%s:%d pid=%d] RAW incoming data %d bytes from peer:\n",
                         __FILE__, __LINE__, my_pid, bytes_read);
-                    for (int i = 0; i < bytes_read; ++i)
-                        fprintf(stderr, "%02X", (uint8_t)(ssl_buf[i]));
-                    fprintf(stderr, "\n");
+//                    for (int i = 0; i < bytes_read; ++i)
+//                        fprintf(stderr, "%02X", (uint8_t)(ssl_buf[i]));
+//                    fprintf(stderr, "\n");
                 }
 
                 if (bytes_read < 0 || (bytes_read == 0 && loop_count == 0))
@@ -543,14 +599,14 @@ int peer_mode(
                         if (DEBUG && VERBOSE_DEBUG)
                             fprintf(stderr, "[%s:%d pid=%d] SSL want_read during peek, bytes_read=%d\n",
                                 __FILE__, __LINE__, my_pid, bytes_read);
+                        continue;
                     }
                     else
                     {
                         fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during peek\n",
                             __FILE__, __LINE__, my_pid, ec);
+                        return EC_SSL;
                     }
-
-                    continue;
                 }
             }
 
@@ -560,13 +616,125 @@ int peer_mode(
             // execution to here means we are in a fully upgraded connection (with incoming data)
 
             // task 1: peek data on incoming to find packet type and length
+            if (packet_type == -1)
+            {
+                uint8_t header_buffer[10] = { 0,0,0,0,0, 0,0,0,0,0 };
+                int rc = -1;
+                size_t bytes_read = 0;
+                rc = SSL_peek_ex(ssl, header_buffer, 6, &bytes_read);
+                if (bytes_read == 6)
+                do {
+                    packet_received = 0;
+                    packet_expected = 
+                        (header_buffer[0] << 24) + 
+                        (header_buffer[1] << 16) + 
+                        (header_buffer[2] << 8) + 
+                        header_buffer[3];
+
+                    int header_size = 6;
+                    packet_uncompressed = 0;
+                    if (packet_expected >> 28U)
+                    {
+                        // compressed
+                        rc = SSL_peek_ex(ssl, header_buffer, 10, &bytes_read);
+                        if (bytes_read != 10)
+                        {
+                            // in this rare edge case a compressed packet has a partially sent header
+                            // wait for the whole header to arrive before continuing
+                            packet_expected = 0;
+                            break;
+                        }
+
+                        packet_expected &= 0x0FFFFFFFU;
+                        packet_uncompressed = 
+                            (header_buffer[6] << 24) + 
+                            (header_buffer[7] << 16) + 
+                            (header_buffer[8] << 8) + 
+                            header_buffer[9];
+                        header_size = 10;
+                    }
+                    
+                    packet_type = (header_buffer[4] << 8) + header_buffer[5];
+
+                    if (DEBUG)
+                        fprintf(stderr, "[%s:%d pid=%d] Peeked packet type %d, size: %d\n",
+                            __FILE__, __LINE__, my_pid,
+                            packet_type, packet_expected); 
+             
+                    // clear out the header bytes by actually reading them this time instead of peeking
+                    if (!((rc = SSL_read_ex(ssl, header_buffer, header_size, &bytes_read)) > 0) &&
+                            bytes_read == header_size)
+                    {
+                        fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during packet read\n",
+                            __FILE__, __LINE__, my_pid, SSL_get_error(ssl, rc));
+                        return EC_SSL;
+                    }
+
+                    // now we're ready to drop through to a payload read
+                } while (0);
+
+                int ec = SSL_get_error(ssl, rc);
+
+                if (ec == 2 || ec == 0)
+                {
+                    continue;
+                }
+                else
+                {
+                    fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during peek\n",
+                        __FILE__, __LINE__, my_pid, ec);
+                    return EC_SSL;
+                }
+            }
+
+            if (packet_type == -1)
+                continue;
+
+            // execution to here means we are in process of reading a packet
+            {
+                int rc = -1;
+                int32_t remaining = packet_expected - packet_received;
+                size_t bytes_read = 0;
+                while (remaining > 0 && (rc =
+                    SSL_read_ex(ssl, packet_buffer + remaining, 
+                    PACKET_BUFFER_SIZE - packet_received, &bytes_read) > 0) &&
+                    bytes_read > 0)
+                {
+                    packet_received += bytes_read;
+                    remaining -= bytes_read;
+                }
+
+                if (remaining > 0)
+                    continue;
+
+                if (packet_uncompressed > 0)
+                {
+                    // RH TODO: decompress packet before handoff(lz4)
+                    fprintf(stderr, "[%s:%d pid=%d] "
+                            "FIXME Compressed packets currently unsupported, dropping\n",
+                        __FILE__, __LINE__, my_pid);
+
+                    continue;
+                } 
+
+                route_to_subscribers(
+                    packet_type,
+                    packet_buffer,
+                    packet_expected);
+
+                // reset
+                packet_type = -1;
+                packet_expected = 0;
+                packet_uncompressed = 0;
+                packet_received = 0;
+                continue;
+            }
+        }
+
             // task 2: continue looping until full packet received in buffer
             // task 3: process any pings
             // task 4: run de-duplication logic
             // task 5: send de-duplicated packets to main
-            
-        }
-
         // task A: read initial packet from main which contains de-duplication rules
         // task B: read incoming packets from main and apply de-duplication rules then relay them to peer
         
@@ -574,3 +742,44 @@ int peer_mode(
     return 0;
 }
 
+/*
+
+                    if (compressed)
+                    {
+                        // RH TODO: decompress packet before handoff(lz4)
+                        fprintf(stderr, "[%s:%d pid=%d] "
+                                "FIXME Compressed packets currently unsupported, dropping\n",
+                            __FILE__, __LINE__, my_pid);
+
+                        continue;
+                    } 
+
+                    printf("payload_size + headersize = %d, packet_buffer_size = %d\n", 
+                            payload_size + header_size,
+                            PACKET_BUFFER_SIZE);
+                    if (payload_size + header_size <= PACKET_BUFFER_SIZE)
+                    {
+                        if (DEBUG && VERBOSE_DEBUG)
+                            fprintf(stderr, "[%s:%d pid=%d] Reading packet "
+                                    "compressed: %s "
+                                    "csize: %d "
+                                    "usize: %d\n",
+                                __FILE__, __LINE__, my_pid,
+                                compressed ? payload_size : 0, uncompressed_size);
+
+                        if ((rc = SSL_read_ex(ssl, packet_buffer, payload_size + header_size, &bytes_read)) > 0
+                                && bytes_read == payload_size + header_size)
+                        {
+                            route_to_subscribers(
+                                packet_type,
+                                packet_buffer,
+                                uncompressed_size);
+                        }
+                        else
+                        {
+                            fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during packet read\n",
+                                __FILE__, __LINE__, my_pid, SSL_get_error(ssl, rc));
+                            return EC_SSL;
+                        }
+                    }
+                    */

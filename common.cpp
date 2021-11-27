@@ -1,8 +1,8 @@
 #include "uplink.h"
 
-Hash hash(const void* mem, int len)
+Hash hash(int packet_type, const void* mem, int len)
 {
-    Hash h { .q = { 0, 0, 0, 0 } };
+    Hash h { .q = { 0, 0, 0, packet_type } };
     uint64_t state = 0;
     uint8_t* ptr = (uint8_t*)mem;
     int i = 0, j = 0;
