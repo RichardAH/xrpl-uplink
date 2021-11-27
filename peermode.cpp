@@ -10,7 +10,7 @@
 #define DEFAULT_BUF_SIZE 64
 
 #define DEBUG 1
-#define VERBOSE_DEBUG 1
+#define VERBOSE_DEBUG 0
 #define HTTP_BUFFER_SIZE 4096
 #define SSL_BUFFER_LENGTH 65536
 
@@ -291,9 +291,15 @@ int peer_mode(
     rbio = BIO_new(BIO_s_mem()); /* SSL reads from, we write to. */
     wbio = BIO_new(BIO_s_mem()); /* SSL writes to, we read from. */
     SSL_set_bio(ssl, rbio, wbio);
-
-    SSL_connect(ssl);
+    SSL_set_connect_state(ssl);
+    if (DEBUG)
+        fprintf(stderr, "[HPWS.C PID+%08X] trying to start ssl handshake\n", my_pid);
+    int n = SSL_do_handshake(ssl);
     SSL_FLUSH_OUT();
+
+    // make fds non-blocking
+    fd_set_flags(peer_fd, O_NONBLOCK);
+    fd_set_flags(main_fd, O_NONBLOCK);
 
     // setup poll
     struct pollfd fdset[2];
@@ -302,9 +308,6 @@ int peer_mode(
     fdset[0].fd = peer_fd;
     fdset[1].fd = main_fd;
 
-    fdset[0].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN ;
-    fdset[1].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN ;
-   
     int connection_upgraded = 0;
 
     if (DEBUG)
@@ -315,10 +318,36 @@ int peer_mode(
     while(1)
     {
 
-        fdset[0].events &= ~POLLOUT;
+        while (ssl_encrypt_len > 0) 
+        {
+            int bytes_written = SSL_write(ssl, ssl_encrypt_buf, ssl_encrypt_len);
 
-        if (ssl_write_len > 0 || !SSL_is_init_finished(ssl))
-            fdset[0].events |= POLLOUT;
+            if (bytes_written > 0)
+            {
+                /* consume the waiting bytes that have been used by SSL */
+                if ((size_t)bytes_written < ssl_encrypt_len)
+                    memmove(ssl_encrypt_buf, ssl_encrypt_buf+bytes_written, ssl_encrypt_len-bytes_written);
+                ssl_encrypt_len -= bytes_written;
+                ssl_encrypt_buf = (char*)realloc(ssl_encrypt_buf, ssl_encrypt_len);
+                SSL_FLUSH_OUT();
+            }
+
+            int status = SSL_get_error(ssl, bytes_written);
+
+            if (status == SSL_ERROR_WANT_WRITE)
+                SSL_FLUSH_OUT()
+            else if (SSL_FAILED(status))
+                fprintf(stderr, "[%s:%d pid=%d] Unable to complete out going write", 
+                    __FILE__, __LINE__, my_pid);
+
+            if (bytes_written == 0)
+              break;
+        }
+
+
+        fdset[0].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN | 
+            (ssl_write_len > 0  ? POLLOUT : 0);
+        fdset[1].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN ;
 
         int poll_result = poll(&fdset[0], 2, POLL_TIMEOUT);
 
@@ -398,36 +427,59 @@ int peer_mode(
                 fprintf(stderr, "[%s:%d pid=%d] incoming data - connection_upgraded: %d\n",
                         __FILE__, __LINE__, my_pid, connection_upgraded);
 
-            ssize_t bytes_read = read(peer_fd, ssl_buf, sizeof(ssl_buf));
-            if (bytes_read <= 0)
+           
+            
+            for (int loop_count = 0; ; ++loop_count)
             {
-                fprintf(stderr, "[%s:%d pid=%d] Could read raw bytes from TCP socket\n",
-                        __FILE__, __LINE__, my_pid);
-                return EC_TCP;
-            }
+                ssize_t bytes_read = read(peer_fd, ssl_buf, sizeof(ssl_buf));
+                if (bytes_read == -1 && errno == EAGAIN)
+                    break;
 
-            ssize_t bytes_written = BIO_write(rbio, ssl_buf, bytes_read);
-            if (bytes_written <= 0)
-            {
-                fprintf(stderr, "[%s:%d pid=%d] Could not write raw bytes to SSL buffer from TCP socket\n",
-                        __FILE__, __LINE__, my_pid);
-                return EC_SSL;
+                if (DEBUG && VERBOSE_DEBUG)
+                {
+                    fprintf(stderr, "[%s:%d pid=%d] RAW incoming data %d bytes from peer:\n",
+                        __FILE__, __LINE__, my_pid, bytes_read);
+                    for (int i = 0; i < bytes_read; ++i)
+                        fprintf(stderr, "%02X", (uint8_t)(ssl_buf[i]));
+                    fprintf(stderr, "\n");
+                }
+
+                if (bytes_read < 0 || (bytes_read == 0 && loop_count == 0))
+                {
+                    fprintf(stderr, "[%s:%d pid=%d] Could not read raw bytes from TCP socket: "
+                            "bytes_read=%d, loop_count=%d\n",
+                            __FILE__, __LINE__, my_pid, bytes_read, loop_count);
+                    return EC_TCP;
+                }
+
+                if (bytes_read == 0)
+                    break;
+
+                ssize_t bytes_written = BIO_write(rbio, ssl_buf, bytes_read);
+                if (bytes_written < 0 || (bytes_written == 0 && loop_count == 0))
+                {
+                    fprintf(stderr, "[%s:%d pid=%d] Could not write raw bytes to SSL buffer from TCP socket\n",
+                            __FILE__, __LINE__, my_pid);
+                    return EC_SSL;
+                }
+               
+                 
+                if (DEBUG && VERBOSE_DEBUG)
+                {
+                    fprintf(stderr, "[%s:%d pid=%d] wrote %d RAW bytes to SSL bio\n",
+                        __FILE__, __LINE__, my_pid, bytes_written);
+                }
+
             }
 
             if (!SSL_is_init_finished(ssl))
             {
-                if (DEBUG)
-                    fprintf(stderr, "[%s:%d pid=%d] Trying SSL handshake with peer %s:%d\n",
-                           __FILE__, __LINE__,  my_pid, ip, port);
-
                 int n = SSL_do_handshake(ssl);
                 int e = SSL_get_error(ssl, n);
-                // RH TODO: evaluate possible errors above
-                SSL_FLUSH_OUT()
+                SSL_FLUSH_OUT();
+                continue;
             }
 
-            if (!SSL_is_init_finished(ssl))
-                continue;
 
             if (connection_upgraded == 0)
             {
@@ -439,36 +491,35 @@ int peer_mode(
                     return rc;
 
                 if (DEBUG)
-                    fprintf(stderr, "[%s:%d pid=%d] Connection upgrade request to %s:%d\n%.*s%s",
-                        __FILE__, __LINE__,  my_pid, ip, port,
-                        (VERBOSE_DEBUG ? len : 0),
-                        (VERBOSE_DEBUG ? upgrade_request : ""),
-                        (VERBOSE_DEBUG ? "\n" : "")
-                    );
+                fprintf(stderr, "[%s:%d pid=%d] Connection upgrade request to %s:%d\n%.*s%s",
+                    __FILE__, __LINE__,  my_pid, ip, port,
+                    (VERBOSE_DEBUG ? len : 0),
+                    (VERBOSE_DEBUG ? upgrade_request : ""),
+                    (VERBOSE_DEBUG ? "\n" : "")
+                );
 
                 SSL_ENQUEUE(upgrade_request, len);
                 SSL_FLUSH_OUT();
                 connection_upgraded = 1;
-                continue;
+
+                // fall through
             }
 
             if (connection_upgraded == 1)
             {
-                printf("trying peek\n");
 
                 char buffer[HTTP_BUFFER_SIZE];
                 size_t bytes_read = 0;
                 int rc = -1;
                 if ((rc = SSL_peek_ex(ssl, buffer, sizeof(buffer), &bytes_read)) > 0)
                 {
-                    printf("peek: `%.*s`\n", bytes_read, buffer);
-                    for (int i = 0; i < bytes_read - 4; ++i)
+                    for (int i = 0; i < bytes_read - 3; ++i)
                     {
                         // looking for \r\n\r\n
-                        if (buffer[i + 0] == '\r' &&
-                            buffer[i + 1] == '\n' &&
-                            buffer[i + 2] == '\r' &&
-                            buffer[i + 3] == '\n')
+                        if (buffer[i + 0] == 0xD &&
+                            buffer[i + 1] == 0xA &&
+                            buffer[i + 2] == 0xD &&
+                            buffer[i + 3] == 0xA)
                         {
                             if (DEBUG)
                                 fprintf(stderr, "[%s:%d pid=%d] Connection upgrade response from %s:%d\n%.*s%s",
@@ -486,8 +537,20 @@ int peer_mode(
                 }
                 else
                 {
-                    //int SSL_get_error(const SSL *ssl, int ret);
-                    printf("peek failed: rc=%d, SSL_get_error=%d\n", rc, SSL_get_error(ssl, rc));
+                    int ec = SSL_get_error(ssl, rc);
+                    if (ec == 2)
+                    {
+                        if (DEBUG && VERBOSE_DEBUG)
+                            fprintf(stderr, "[%s:%d pid=%d] SSL want_read during peek, bytes_read=%d\n",
+                                __FILE__, __LINE__, my_pid, bytes_read);
+                    }
+                    else
+                    {
+                        fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during peek\n",
+                            __FILE__, __LINE__, my_pid, ec);
+                    }
+
+                    continue;
                 }
             }
 
@@ -496,7 +559,7 @@ int peer_mode(
 
             // execution to here means we are in a fully upgraded connection (with incoming data)
 
-            // task 1: peek data on incoming to find packet type and lengthh
+            // task 1: peek data on incoming to find packet type and length
             // task 2: continue looping until full packet received in buffer
             // task 3: process any pings
             // task 4: run de-duplication logic
@@ -507,8 +570,6 @@ int peer_mode(
         // task A: read initial packet from main which contains de-duplication rules
         // task B: read incoming packets from main and apply de-duplication rules then relay them to peer
         
-
-        sleep(1);
     }
     return 0;
 }
