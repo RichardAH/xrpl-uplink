@@ -35,3 +35,19 @@ Subscriber Life-cycle:
 
 5. A disconnected subscriber is immediately considered dead.
 ```
+
+
+## Inter-process packet header format
+offset | size | field
+-|-|-
+0|4|timestamp
+4|4|flags
+8|4|payload length
+12|2|packet type
+14|2|port (if applicable)
+16|16|inet addr (if applicable)
+32|32|packet hash
+64|32|peer from (may be null when subscriber sends)
+96|32|peer to ^
+total|128|
+^ peer to may be null to send to all peers, or it may be a mask as determined by flags
