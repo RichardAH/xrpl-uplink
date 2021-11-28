@@ -46,13 +46,38 @@ struct HashComparator
     }
 };
 
+
+/**
+ * N = not de-duplicated
+ * D = de-duplicated
+ * B = dropped/destroyed
+ 
+ Peer   Subscriber      ddmode
+    D            D      DD_ALL
+    D            N      DD_PEER
+    D            B      DD_SQUELCH
+    N            D      DD_SUB
+    N            N      DD_NONE
+    N            B      DD_SQUELCH_N
+    B            D      DD_DROP
+    B            N      DD_DROP_N
+    B            B      DD_BLACKHOLE
+*/
+
 enum ddmode : int8_t 
 {
     DD_INVALID = -1,
-    DD_ALL = 0,
-    DD_NONE = 1,
-    DD_SUB = 2,
-    DD_PEER = 3
+    DD_ALL = 0,         // de-duplicate packets in both directions
+    DD_NONE = 1,        // do not de-duplicate packets in either direction
+    DD_SUB = 2,         // de-duplicate packets routed from subscribers to peers (but not peers to subscribers)
+    DD_PEER = 3,        // de-duplicate packets routed from peers to subscribers (but not subscribers to peers)
+    DD_DROP = 4,        // drop packets routed from peers to subscribers
+                        // and de-duplicate packets from subscribers to peers
+    DD_DROP_N = 5,      // drop packets routed from peers to subscribrs
+                        // do NOT de-duplicate packet from subscribers to peers
+    DD_BLACKHOLE = 6,   // drop packets in both directions
+    DD_SQUELCH = 7,     // drop subscriber's packets, de-duplicate peer's packets
+    DD_SQUELCH_N = 8    // drop subscriber's packets, do NOT de-duplicate peer's packets
 };
 
 enum ercode : int
