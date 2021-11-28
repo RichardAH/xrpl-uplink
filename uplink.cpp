@@ -33,12 +33,15 @@ int print_usage(int argc, char** argv, const char* error)
     "\tblackhole - drop packets in both directions\n"
     "\tsquelch   - drop subscriber's outbound packets, but de-duplicate peer's inbound packets\n"
     "\tsquelchn  - drop subscriber's outbound packets, do NOT de-duplicate peer's inbound packets\n"
-    "Packet Types:\n"
+    "Packet types:\n"
     "\tmtMANIFESTS mtPING mtCLUSTER mtENDPOINTS mtTRANSACTION mtGET_LEDGER mtLEDGER_DATA mtPROPOSE_LEDGER\n"
     "\tmtSTATUS_CHANGE mtHAVE_SET mtVALIDATION mtGET_OBJECTS mtGET_SHARD_INFO mtSHARD_INFO mtGET_PEER_SHARD_INFO\n"
     "\tmtPEER_SHARD_INFO mtVALIDATORLIST mtSQUELCH mtVALIDATORLISTCOLLECTION mtPROOF_PATH_REQ mtPROOF_PATH_RESPONSE\n"
     "\tmtREPLAY_DELTA_REQ mtREPLAY_DELTA_RESPONSE mtGET_PEER_SHARD_INFO_V2 mtPEER_SHARD_INFO_V2 mtHAVE_TRANSACTIONS\n"
     "\tmtTRANSACTIONS\n"
+    "Note:\tmtPING and mtENDPOINTS packets are processed by uplink but are not normally forwarded to subscribers, unless\n"
+    "\ta non-dropping ddmode is attached to that packet type (see above). In this case they are still processed but\n"
+    "\tare also forwarded to peers according to that ddmode.\n"
     "Example:\n"
     "       %s 10 r.ripple.com 51235 all mtGET_LEDGER:none\n",
     VERSION, 
