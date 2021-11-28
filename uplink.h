@@ -47,6 +47,67 @@ struct HashComparator
 };
 
 
+// All unix-domain piped messages are prefixed with a 128 byte header. The minimum size of a message is 128 bytes.
+
+/**
+ * Packet header is attached to all messages containing a packet in either direction
+ */
+struct MessagePacket
+{
+    uint32_t flags;             // (flags >> 28U) == 0
+    uint32_t size;
+    uint32_t timestamp;
+    uint16_t type;
+    uint16_t source_port;
+    uint8_t  source_addr[16];
+    uint8_t  hash[32];
+    uint8_t  source_peer[32];
+    uint8_t  destination_peer[32];
+};
+
+struct MessageDDMode
+{
+    uint32_t flags;             // (flags >> 28U) == 1
+    uint16_t ddmode_info[62];   // [<packet_type (uint8_t), dd_mode (uint8_t)> (uint16_t)]*
+};
+
+struct MessagePeerStatus
+{
+    uint32_t flags;             // (flags >> 28U) == 2
+    uint32_t reserved1;
+    uint32_t timestamp;
+    uint16_t type;              // 0 = connected, 1 = disconnected
+    uint16_t destination_port;
+    uint8_t  destination_addr[16];
+    uint8_t reserved2[32];
+    uint8_t local_peer[32];     // our key
+    uint8_t remote_peer[32];    // their key
+};
+
+struct MessagePingPong
+{
+    uint32_t flags;             // (flags >> 28U) == 3 (ping) 4 (pong)
+    uint32_t nonce;
+    uint8_t unused[120];
+};
+
+struct MessageUnknown           // used when ascertaining the message type
+{
+    uint32_t flags;
+    uint8_t data[124];
+};
+
+union Message
+{
+    MessagePacket packet;
+    MessageDDMode ddmode;
+    MessagePeerStatus peer;
+    MessagePingPong pingpong;
+    MessageUnknown unknown;
+};
+
+
+
 /**
  * N = not de-duplicated
  * D = de-duplicated

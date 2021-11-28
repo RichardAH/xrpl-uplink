@@ -72,6 +72,7 @@ ddmode parse_dd(char* dd)
 
 int main(int argc, char** argv)
 {
+
     b58_sha256_impl = calc_sha_256; 
     if (sodium_init() < 0) {
         fprintf(stderr, "Could not init libsodium\n");
