@@ -66,6 +66,16 @@ ddmode parse_dd(char* dd)
         return DD_SUB;
     else if (strcmp(dd, "peer") == 0)
         return DD_PEER;
+    else if (strcmp(dd, "drop") == 0)
+        return DD_DROP;
+    else if (strcmp(dd, "dropn") == 0)
+        return DD_DROP_N;
+    else if (strcmp(dd, "blackhole") == 0)
+        return DD_BLACKHOLE;
+    else if (strcmp(dd, "squelch") == 0)
+        return DD_SQUELCH;
+    else if (strcmp(dd, "squelchn") == 0)
+        return DD_SQUELCH_N;
     else
         return DD_INVALID;
 }
@@ -73,9 +83,12 @@ ddmode parse_dd(char* dd)
 int main(int argc, char** argv)
 {
 
+    pid_t my_pid = getpid();
+
+
     b58_sha256_impl = calc_sha_256; 
     if (sodium_init() < 0) {
-        fprintf(stderr, "Could not init libsodium\n");
+        printl("Could not init libsodium\n");
         return EC_SODIUM;
     }
 
@@ -117,8 +130,6 @@ int main(int argc, char** argv)
 
         strncpy(host, new_host, sizeof(host) - 1);
     }
-
-    printf("host postlookup: %s\n", host);
 
     int port = 0;
     if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
@@ -262,7 +273,7 @@ int main(int argc, char** argv)
     // ensure db path exists
     if (!(mkdir(db_path, 0700) == 0 || errno == EEXIST))
     {
-        fprintf(stderr, "Could not create/access directory: `%s` for database files\n", db_path);
+        printl("Could not create/access directory: `%s` for database files\n", db_path);
         return EC_PARAMS;
     }
 
@@ -275,7 +286,7 @@ int main(int argc, char** argv)
     // ensure socket path exists
     if (!(mkdir(sock_path, 0700) == 0 || errno == EEXIST))
     {
-        fprintf(stderr, "Could not create/access directory: `%s` for socket files\n", sock_path);
+        printl("Could not create/access directory: `%s` for socket files\n", sock_path);
         return EC_PARAMS;
     }
 
@@ -286,32 +297,32 @@ int main(int argc, char** argv)
         int fd = open(key_path, O_RDONLY);
         if (fd < 0 || read(fd, key, 32) != 32)
         {
-            fprintf(stderr, "Could not open keyfile %s for reading\n", key_path);
+            printl("Could not open keyfile %s for reading\n", key_path);
             return EC_PARAMS;
         }
         close(fd);
     }
     else
     {
-        fprintf(stderr, "Warning: creating keyfile %s with random key (file doesn't yet exist)\n", key_path);
+        printl("Warning: creating keyfile %s with random key (file doesn't yet exist)\n", key_path);
 
         // create the keyfile
         int fd = open(key_path, O_WRONLY | O_CREAT, 0600);
         if (fd < 0)
         {
-            fprintf(stderr, "Could not open keyfile %s for writing\n", key_path);
+            printl("Could not open keyfile %s for writing\n", key_path);
             return EC_PARAMS;
         }
         int rnd = open("/dev/urandom", O_RDONLY);
         if (rnd < 0 || read(rnd, key, 32) != 32) // RH TODO: not every random 32 byte seq is a valid secp256k1 key
         {
-            fprintf(stderr, "Could read /dev/urandom to generate key\n");
+            printl("Could read /dev/urandom to generate key\n");
             return EC_PARAMS;
         }
 
         if (write(fd, key, 32) !=32)
         {
-            fprintf(stderr, "Could not write key to keyfile %s\n", key_path);
+            printl("Could not write key to keyfile %s\n", key_path);
             return EC_PARAMS;
         }
         close(rnd);
@@ -348,7 +359,7 @@ int main(int argc, char** argv)
             }
 
             // should be unreachable
-            fprintf(stderr, "Execlp failed, could not spawn peer process\n");
+            printl("execlp failed, could not spawn peer process\n");
             return EC_SPAWN;
         }
 

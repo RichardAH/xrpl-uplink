@@ -52,8 +52,7 @@ int route_to_subscribers(int packet_type, uint8_t* packet_buffer, int size)
 
     if (DEBUG)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Packet route_to_subscribers type=%d size=%d ",
-               __FILE__, __LINE__, my_pid, packet_type, size);
+        printl("Packet route_to_subscribers type=%d size=%d ", packet_type, size);
 
         print_hash(h, (seen_before ? "seen=" : "hash="), "\n");
     }
@@ -75,8 +74,7 @@ int generate_node_keys(
     secp256k1_pubkey* pubkey = (secp256k1_pubkey*)((void*)(outpubraw64));
 
     if (!secp256k1_ec_pubkey_create(ctx, pubkey, (const unsigned char*)keyin)) {
-        fprintf(stderr, "[%s:%d pid=%d] Could not generate secp256k1 keypair\n",
-                __FILE__, __LINE__, my_pid);
+        printl("Could not generate secp256k1 keypair\n");
         exit(EC_SECP256K1);
     }
 
@@ -120,7 +118,7 @@ int generate_upgrade(
     len = SSL_get_finished(ssl, buffer, 1024);
     if (len < 12)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_finished\n", __FILE__, __LINE__, my_pid);
+        printl("Could not SSL_get_finished\n");
         return EC_SSL;
     }
 
@@ -131,7 +129,7 @@ int generate_upgrade(
     len = SSL_get_peer_finished(ssl, buffer, 1024);
     if (len < 12)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not SSL_get_peer_finished\n", __FILE__, __LINE__, my_pid);
+        printl("Could not SSL_get_peer_finished\n");
         return EC_SSL;
     }   
    
@@ -184,8 +182,7 @@ int generate_upgrade(
     }
     else
     {
-        fprintf(stderr, "[%s:%d pid=%d] Could not create upgrade request, buffer too small. Wrote=%d Buflen=%d.\n",
-                __FILE__, __LINE__, my_pid, bytes_written, *buflen);
+        printl("Could not create upgrade request, buffer too small. Wrote=%d Buflen=%d.\n", bytes_written, *buflen);
         *buflen = 0;
         return EC_BUFFER;
     }
@@ -211,8 +208,7 @@ int peer_mode(
 
         if ((peer_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not create TCP socket for peer %s:%d\n",
-                    __FILE__, __LINE__, my_pid, ip, port);
+            printl("Could not create TCP socket for peer %s:%d\n", ip, port);
             return EC_TCP;
         }
 
@@ -223,15 +219,13 @@ int peer_mode(
 
         if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not parse ip %s while trying to connect to peer\n",
-                    __FILE__, __LINE__, my_pid, ip);
+            printl("Could not parse ip %s while trying to connect to peer\n", ip);
             return EC_TCP;
         }
 
         if (connect(peer_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not connect to peer %s:%d\n",
-                    __FILE__, __LINE__, my_pid, ip, port);
+            printl("Could not connect to peer %s:%d\n", ip, port);
             return EC_TCP;
         }
     }
@@ -247,16 +241,14 @@ int peer_mode(
         // create socket
         if ((main_fd = socket(AF_UNIX, SOCK_SEQPACKET, 0)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not create peer unix domain socket (connecting)\n",
-                    __FILE__, __LINE__, my_pid);
+            printl("Could not create peer unix domain socket (connecting)\n");
             return EC_UNIX;
         }
 
         // connect
         if (connect(main_fd, (const struct sockaddr*)&addr, sizeof(addr)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not connect to main unix domain socket %s\n", 
-                    __FILE__, __LINE__, my_pid, main_path);
+            printl("Could not connect to main unix domain socket %s\n", main_path);
             return EC_UNIX;
         }
     }
@@ -264,8 +256,7 @@ int peer_mode(
     // sanity check
     if (main_fd < 0 || peer_fd < 0)
     {
-        fprintf(stderr, "[%s:%d pid=%d] main_fd or peer_fd invalid\n",
-                __FILE__, __LINE__, my_pid);
+        printl("main_fd or peer_fd invalid\n");
         return EC_GENERIC;
     }
 
@@ -285,8 +276,7 @@ int peer_mode(
     
     if (!packet_buffer)
     {
-        fprintf(stderr, "[%s:%d pid=%d] Malloc failed while creating packet_buffer\n",
-            __FILE__, __LINE__, my_pid);
+        printl("Malloc failed while creating packet_buffer\n");
         return EC_BUFFER;
     }
 
@@ -310,7 +300,7 @@ int peer_mode(
         {\
             bytes_read = BIO_read(wbio, ssl_buf, sizeof(ssl_buf));\
             if (DEBUG)\
-                fprintf(stderr, "[%s:%d pid=%d] flushing %ld bytes\n", __FILE__, __LINE__, my_pid, bytes_read);\
+                printl("flushing %ld bytes\n", bytes_read);\
             if (bytes_read > 0)\
             {\
                 ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len + bytes_read);\
@@ -319,8 +309,7 @@ int peer_mode(
             }\
             else if (!BIO_should_retry(wbio))\
             {\
-                fprintf(stderr, "[%s:%d pid=%d] Could not enqueue outward SSL bytes\n",\
-                        __FILE__, __LINE__, my_pid);\
+                printl("Could not enqueue outward SSL bytes\n");\
                 return EC_SSL;\
             }\
         } while (bytes_read > 0);\
@@ -352,7 +341,7 @@ int peer_mode(
     SSL_set_bio(ssl, rbio, wbio);
     SSL_set_connect_state(ssl);
     if (DEBUG)
-        fprintf(stderr, "[HPWS.C PID+%08X] trying to start ssl handshake\n", my_pid);
+        printl("trying to start ssl handshake\n");
     int n = SSL_do_handshake(ssl);
     SSL_FLUSH_OUT();
 
@@ -370,8 +359,7 @@ int peer_mode(
     int connection_upgraded = 0;
 
     if (DEBUG)
-        fprintf(stderr, "[%s:%d pid=%d] Starting poll loop for peer %s\n",
-                __FILE__, __LINE__, my_pid, ip);
+        printl("Starting poll loop for peer %s\n", ip);
 
     // primary poll loop
     while(1)
@@ -399,8 +387,7 @@ int peer_mode(
             if (status == SSL_ERROR_WANT_WRITE)
                 SSL_FLUSH_OUT()
             else if (SSL_FAILED(status))
-                fprintf(stderr, "[%s:%d pid=%d] Unable to complete out going write", 
-                    __FILE__, __LINE__, my_pid);
+                printl("Unable to complete out going write\n");
 
             if (bytes_written == 0)
               break;
@@ -415,8 +402,7 @@ int peer_mode(
 
         if (poll_result < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] poll returned -1\n",
-                __FILE__, __LINE__, my_pid);
+            printl("poll returned -1\n");
             return EC_POLL;
         }
 
@@ -427,8 +413,7 @@ int peer_mode(
             if (SSL_is_init_finished(ssl))
                 continue;
 
-            fprintf(stderr, "[%s:%d pid=%d] SSL handshake timed out with peer %s:%d\n",
-                __FILE__, __LINE__, my_pid, ip, port);
+            printl("SSL handshake timed out with peer %s:%d\n", ip, port);
             return EC_SSL;
         }
 
@@ -440,8 +425,7 @@ int peer_mode(
             int error = 0;
             socklen_t errlen = sizeof(error);
             getsockopt(peer_fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen);
-            fprintf(stderr, "[%s:%d pid=%d] Peer connection lost %s:%d, socket err: %d, errno: %d\n",
-                 __FILE__, __LINE__, my_pid, ip, port, error, errno);
+            printl("Peer connection lost %s:%d, socket err: %d, errno: %d\n", ip, port, error, errno);
 
             return EC_TCP;
         }
@@ -452,8 +436,7 @@ int peer_mode(
             int error = 0;
             socklen_t errlen = sizeof(error);
             getsockopt(peer_fd, SOL_SOCKET, SO_ERROR, (void *)&error, &errlen);
-            fprintf(stderr, "[%s:%d pid=%d] Main connection lost %s, socket err: %d, errno: %d\n",
-                __FILE__, __LINE__, my_pid, main_path, error, errno);
+            printl("Main connection lost %s, socket err: %d, errno: %d\n", main_path, error, errno);
 
             return EC_UNIX;
         }
@@ -463,12 +446,11 @@ int peer_mode(
         {
             ssize_t bytes_written = write(peer_fd, ssl_write_buf, ssl_write_len);
             if (DEBUG)
-                fprintf(stderr, "[%s:%d pid=%d] RAW outgoing data %ld\n", __FILE__, __LINE__, my_pid, bytes_written);
+                printl("RAW outgoing data %ld\n", bytes_written);
 
             if (bytes_written <= 0)
             {
-                fprintf(stderr, "[%s:%d pid=%d] Could not write encrypted bytes to socket\n",
-                    __FILE__, __LINE__, my_pid); 
+                printl("Could not write encrypted bytes to socket\n"); 
                 return EC_SSL;
             }
 
@@ -477,8 +459,7 @@ int peer_mode(
             ssl_write_len -= bytes_written;
             ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
             if (DEBUG)
-                fprintf(stderr, "[%s:%d pid=%d] RAW bytes remaining to write: %ld\n",
-                    __FILE__, __LINE__, my_pid, ssl_write_len);
+                printl("RAW bytes remaining to write: %ld\n", ssl_write_len);
         }        
 
         // check if there are incoming bytes from TCP
@@ -486,8 +467,7 @@ int peer_mode(
         {
 
             if (DEBUG && VERBOSE_DEBUG)
-                fprintf(stderr, "[%s:%d pid=%d] incoming data - connection_upgraded: %d\n",
-                        __FILE__, __LINE__, my_pid, connection_upgraded);
+                printl("incoming data - connection_upgraded: %d\n", connection_upgraded);
 
            
             
@@ -499,8 +479,7 @@ int peer_mode(
 
                 if (DEBUG && VERBOSE_DEBUG)
                 {
-                    fprintf(stderr, "[%s:%d pid=%d] RAW incoming data %d bytes from peer:\n",
-                        __FILE__, __LINE__, my_pid, bytes_read);
+                    printl("RAW incoming data %d bytes from peer:\n", bytes_read);
 //                    for (int i = 0; i < bytes_read; ++i)
 //                        fprintf(stderr, "%02X", (uint8_t)(ssl_buf[i]));
 //                    fprintf(stderr, "\n");
@@ -508,9 +487,8 @@ int peer_mode(
 
                 if (bytes_read < 0 || (bytes_read == 0 && loop_count == 0))
                 {
-                    fprintf(stderr, "[%s:%d pid=%d] Could not read raw bytes from TCP socket: "
-                            "bytes_read=%d, loop_count=%d\n",
-                            __FILE__, __LINE__, my_pid, bytes_read, loop_count);
+                    printl("Could not read raw bytes from TCP socket: "
+                            "bytes_read=%d, loop_count=%d\n", bytes_read, loop_count);
                     return EC_TCP;
                 }
 
@@ -520,16 +498,14 @@ int peer_mode(
                 ssize_t bytes_written = BIO_write(rbio, ssl_buf, bytes_read);
                 if (bytes_written < 0 || (bytes_written == 0 && loop_count == 0))
                 {
-                    fprintf(stderr, "[%s:%d pid=%d] Could not write raw bytes to SSL buffer from TCP socket\n",
-                            __FILE__, __LINE__, my_pid);
+                    printl("Could not write raw bytes to SSL buffer from TCP socket\n");
                     return EC_SSL;
                 }
                
                  
                 if (DEBUG && VERBOSE_DEBUG)
                 {
-                    fprintf(stderr, "[%s:%d pid=%d] wrote %d RAW bytes to SSL bio\n",
-                        __FILE__, __LINE__, my_pid, bytes_written);
+                    printl("wrote %d RAW bytes to SSL bio\n", bytes_written);
                 }
 
             }
@@ -553,8 +529,8 @@ int peer_mode(
                     return rc;
 
                 if (DEBUG)
-                fprintf(stderr, "[%s:%d pid=%d] Connection upgrade request to %s:%d\n%.*s%s",
-                    __FILE__, __LINE__,  my_pid, ip, port,
+                printl("Connection upgrade request to %s:%d\n%.*s%s",
+                    ip, port,
                     (VERBOSE_DEBUG ? len : 0),
                     (VERBOSE_DEBUG ? upgrade_request : ""),
                     (VERBOSE_DEBUG ? "\n" : "")
@@ -584,8 +560,8 @@ int peer_mode(
                             buffer[i + 3] == 0xA)
                         {
                             if (DEBUG)
-                                fprintf(stderr, "[%s:%d pid=%d] Connection upgrade response from %s:%d\n%.*s%s",
-                                    __FILE__, __LINE__,  my_pid, ip, port,
+                                printl("Connection upgrade response from %s:%d\n%.*s%s",
+                                    ip, port,
                                     (VERBOSE_DEBUG ? i + 4 : 0),
                                     (VERBOSE_DEBUG ? buffer : ""),
                                     (VERBOSE_DEBUG ? "\n" : "")
@@ -603,14 +579,12 @@ int peer_mode(
                     if (ec == 2)
                     {
                         if (DEBUG && VERBOSE_DEBUG)
-                            fprintf(stderr, "[%s:%d pid=%d] SSL want_read during peek, bytes_read=%d\n",
-                                __FILE__, __LINE__, my_pid, bytes_read);
+                            printl("SSL want_read during peek, bytes_read=%d\n", bytes_read);
                         continue;
                     }
                     else
                     {
-                        fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during peek\n",
-                            __FILE__, __LINE__, my_pid, ec);
+                        printl("SSL error=%d during peek\n", ec);
                         return EC_SSL;
                     }
                 }
@@ -663,16 +637,13 @@ int peer_mode(
                     packet_type = (header_buffer[4] << 8) + header_buffer[5];
 
                     if (DEBUG)
-                        fprintf(stderr, "[%s:%d pid=%d] Peeked packet type %d, size: %d\n",
-                            __FILE__, __LINE__, my_pid,
-                            packet_type, packet_expected); 
+                        printl("Peeked packet type %d, size: %d\n", packet_type, packet_expected); 
              
                     // clear out the header bytes by actually reading them this time instead of peeking
                     if (!((rc = SSL_read_ex(ssl, header_buffer, header_size, &bytes_read)) > 0) &&
                             bytes_read == header_size)
                     {
-                        fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during packet read\n",
-                            __FILE__, __LINE__, my_pid, SSL_get_error(ssl, rc));
+                        printl("SSL error=%d during packet read\n", SSL_get_error(ssl, rc));
                         return EC_SSL;
                     }
 
@@ -686,18 +657,15 @@ int peer_mode(
                             packet_buffer = (uint8_t*)malloc(packet_buffer_len);
                             if (!packet_buffer)
                             {
-                                fprintf(stderr, "[%s:%d pid=%d] Malloc failed while upsizing packet_buffer\n",
-                                    __FILE__, __LINE__, my_pid);
+                                printl("Malloc failed while upsizing packet_buffer\n");
                                 return EC_BUFFER;
                             }
                         }
                         else
                         {
-                            fprintf(stderr, "[%s:%d pid=%d] "
-                                    "Received a packet which exceeds maximum buffer size. "
-                                    "buffer_size=%d packet_size=%d packet_type=%d\n",
-                                    __FILE__, __LINE__, my_pid,
-                                    PACKET_BUFFER_MAX, packet_expected, packet_type);
+                            printl("Received a packet which exceeds maximum buffer size. "
+                               "buffer_size=%d packet_size=%d packet_type=%d\n",
+                               PACKET_BUFFER_MAX, packet_expected, packet_type);
                             return EC_BUFFER;
                         }
                     }
@@ -709,8 +677,7 @@ int peer_mode(
                         packet_buffer = (uint8_t*)malloc(packet_buffer_len);
                         if (!packet_buffer)
                         {
-                            fprintf(stderr, "[%s:%d pid=%d] Malloc failed while downsizing packet_buffer\n",
-                                __FILE__, __LINE__, my_pid);
+                            printl("Malloc failed while downsizing packet_buffer\n");
                             return EC_BUFFER;
                         }
                     }
@@ -728,8 +695,7 @@ int peer_mode(
                 }
                 else
                 {
-                    fprintf(stderr, "[%s:%d pid=%d] SSL error=%d during peek\n",
-                        __FILE__, __LINE__, my_pid, ec);
+                    printl("SSL error=%d during peek\n", ec);
                     return EC_SSL;
                 }
             }
@@ -757,9 +723,7 @@ int peer_mode(
                 if (packet_uncompressed > 0)
                 {
                     // RH TODO: decompress packet before handoff(lz4)
-                    fprintf(stderr, "[%s:%d pid=%d] "
-                            "FIXME Compressed packets currently unsupported, dropping\n",
-                        __FILE__, __LINE__, my_pid);
+                    printl("FIXME Compressed packets currently unsupported, dropping\n");
 
                     continue;
                 } 

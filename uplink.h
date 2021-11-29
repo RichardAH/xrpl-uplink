@@ -31,6 +31,9 @@
 #include "sha-256.h"
 #include "libbase58.h"
 
+#define printl(s, ...)\
+    fprintf(stderr, "[%s:%d pid=%d] " s, __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
+
 typedef union hash_
 {
     uint8_t b[32];

@@ -23,22 +23,19 @@ int main_mode(
 
         if ((peer_accept = create_unix_accept(peer_path)) < 0)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not create peer accept socket\n",
-                __FILE__, __LINE__, my_pid);
+            printl("Could not create peer accept socket\n");
             return -peer_accept;
         }
 
         if (!fd_set_flags(peer_accept, O_CLOEXEC | O_NONBLOCK))
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not set flags\n",
-                __FILE__, __LINE__, my_pid);
+            printl("Could not set flags\n");
             return EC_UNIX;
         }
        
         if (listen(peer_accept, ACCEPT_QUEUE) == -1)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not call listen on peer_accept unix domain socket\n",
-                __FILE__, __LINE__, my_pid);
+            printl("Could not call listen on peer_accept unix domain socket\n");
             return EC_UNIX;
         } 
     }
@@ -51,21 +48,19 @@ int main_mode(
 
         if ((subscriber_accept = create_unix_accept(subscriber_path)) < 0)
         {
-            fprintf(stderr, "Could not create subscriber accept socket\n");
+            printl("Could not create subscriber accept socket\n");
             return -subscriber_accept;
         }
 
         if (!fd_set_flags(subscriber_accept, O_CLOEXEC | O_NONBLOCK))
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not set flags\n",
-                __FILE__, __LINE__, my_pid);
+            printl("Could not set flags\n");
             return EC_UNIX;
         }
 
         if (listen(subscriber_accept, ACCEPT_QUEUE) == -1)
         {
-            fprintf(stderr, "[%s:%d pid=%d] Could not call listen on subscriber_accept unix domain socket\n",
-                __FILE__, __LINE__, my_pid);
+            printl("Could not call listen on subscriber_accept unix domain socket\n");
             return EC_UNIX;
         } 
     }
@@ -93,11 +88,21 @@ int main_mode(
         int poll_result = poll(fdset, MAX_FDS, -1);
         if (poll_result == -1)
         {
-            fprintf(stderr, "Poll returned -1. Errno=%d\n", errno);
+            printl("Poll returned -1. Errno=%d\n", errno);
             return 5;
         }
 
-        printf("poll result %d\n", poll_result);
+        if (((fdset[0].revents & POLLERR) ||
+             (fdset[0].revents & POLLHUP) ||
+             (fdset[0].revents & POLLNVAL)) &&
+            ((fdset[1].revents & POLLERR) ||
+             (fdset[1].revents & POLLHUP) ||
+             (fdset[1].revents & POLLNVAL)))
+        {
+            printl("Accept socket error or hangup.\n");
+            break;
+        }
+        printl("poll result %d\n", poll_result);
 
         // process accepts
         if (fdset[0].revents & POLLIN || fdset[1].revents & POLLIN)
@@ -109,8 +114,7 @@ int main_mode(
                 ((new_fd = accept(subscriber_accept, NULL, NULL)) > -1 && (is_subscriber = 1)))
             {
                 // insert
-                fprintf(stderr, "[%s:%d pid=%d] Accepting connection fd=%d\n",
-                        __FILE__, __LINE__, my_pid, new_fd);
+                printl("Accepting connection fd=%d\n", new_fd);
                 int found = -1;
                 for (int i = 0; i < MAX_FDS; ++i)
                 if (fdset[i].fd < 0)
@@ -124,9 +128,7 @@ int main_mode(
 
                 if (found == -1)
                 {
-                    fprintf(stderr,
-                            "[%s:%d pid=%d] Could not accept incoming unix domain peer.sock connection (fds full)\n",
-                            __FILE__, __LINE__, my_pid);
+                    printl("Could not accept incoming unix domain peer.sock connection (fds full)\n");
                     close(new_fd);
                 }
                 else if (is_subscriber)
@@ -138,7 +140,11 @@ int main_mode(
         }
 
         // process incoming messages
-        //
+        uint8_t message_header[128];
+        {
+    
+
+        }
 
 
         sleep(1);
