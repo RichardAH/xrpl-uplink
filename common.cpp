@@ -110,6 +110,31 @@ const char* packet_name(
     }
 }
 
+
+ddmode parse_dd(char* dd)
+{
+    if (strcmp(dd, "all") == 0)
+        return DD_ALL;
+    else if (strcmp(dd, "none") == 0)
+        return DD_NONE;
+    else if (strcmp(dd, "sub") == 0)
+        return DD_SUB;
+    else if (strcmp(dd, "peer") == 0)
+        return DD_PEER;
+    else if (strcmp(dd, "drop") == 0)
+        return DD_DROP;
+    else if (strcmp(dd, "dropn") == 0)
+        return DD_DROP_N;
+    else if (strcmp(dd, "blackhole") == 0)
+        return DD_BLACKHOLE;
+    else if (strcmp(dd, "squelch") == 0)
+        return DD_SQUELCH;
+    else if (strcmp(dd, "squelchn") == 0)
+        return DD_SQUELCH_N;
+    else
+        return DD_INVALID;
+}
+
 // 0 == invalid
 uint8_t packet_id(char* packet_name)
 {

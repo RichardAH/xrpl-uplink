@@ -56,30 +56,6 @@ int print_usage(int argc, char** argv, const char* error)
     return EC_PARAMS;
 }
 
-ddmode parse_dd(char* dd)
-{
-    if (strcmp(dd, "all") == 0)
-        return DD_ALL;
-    else if (strcmp(dd, "none") == 0)
-        return DD_NONE;
-    else if (strcmp(dd, "sub") == 0)
-        return DD_SUB;
-    else if (strcmp(dd, "peer") == 0)
-        return DD_PEER;
-    else if (strcmp(dd, "drop") == 0)
-        return DD_DROP;
-    else if (strcmp(dd, "dropn") == 0)
-        return DD_DROP_N;
-    else if (strcmp(dd, "blackhole") == 0)
-        return DD_BLACKHOLE;
-    else if (strcmp(dd, "squelch") == 0)
-        return DD_SQUELCH;
-    else if (strcmp(dd, "squelchn") == 0)
-        return DD_SQUELCH_N;
-    else
-        return DD_INVALID;
-}
-
 int main(int argc, char** argv)
 {
 
@@ -106,7 +82,7 @@ int main(int argc, char** argv)
     char host[256]; host[sizeof(host) - 1] = '\0';
     strncpy(host, argv[2], sizeof(host) - 1);
 
-    printf("host prelookup: %s\n", host);
+    printl("host prelookup: %s\n", host);
 
     // check for valid ipv4 address and perform nslookup
     if (sscanf(host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
@@ -138,7 +114,7 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
-    ddmode dd_default = DD_ALL;
+    ddmode dd_default = DD_NOT_SET;
     if (argc >= 5)
         dd_default = parse_dd(argv[4]);
 
@@ -227,7 +203,7 @@ int main(int argc, char** argv)
                 ddmode mode = parse_dd(ddtype);
                 if (packet > -1 && mode != DD_INVALID)
                 {
-                    printf("packet: %d mode: %d\n", packet, mode);
+                    printl("parsed ddmode -- packet: %d mode: %d\n", packet, mode);
                     dd_specific.emplace(packet, mode);
                 }
                 else
@@ -364,7 +340,8 @@ int main(int argc, char** argv)
         }
 
         // continue to main mode
-        return main_mode(host, port, peer_max, peer_path, subscriber_path, db_path, key, dd_default, dd_specific);
+        return main_mode(host, port, peer_max, peer_path, subscriber_path, db_path, key,
+                dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific);
     }
     else
     {

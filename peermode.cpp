@@ -26,7 +26,8 @@
 
 inline pid_t my_pid;
 
-std::map<Hash, uint64_t, HashComparator> seen_p2s;
+std::map<Hash, uint32_t, HashComparator> seen_p2s;
+std::map<Hash, uint32_t, HashComparator> seen_s2p;
 
 #define print_hash(h, before, after)\
 {\
@@ -250,13 +251,17 @@ int peer_mode(
     uint8_t* packet_buffer =
         (uint8_t*)(malloc(PACKET_BUFFER_NORM));
 
-    if (!packet_buffer)
+    uint8_t* packet_buffer_out =
+        (uint8_t*)(malloc(PACKET_BUFFER_NORM));
+
+    if (!packet_buffer || !packet_buffer_out)
     {
         printl("Malloc failed while creating packet_buffer\n");
         return EC_BUFFER;
     }
 
     size_t packet_buffer_len = PACKET_BUFFER_NORM;
+    size_t packet_buffer_out_len = PACKET_BUFFER_NORM;
 
     int packet_type = -1;               // type of the current packet we're receiving
     uint32_t packet_uncompressed = 0;   // uncompressed size of the current packet or 0 if already uncompressed
@@ -450,27 +455,140 @@ struct msghdr {
 
             printl("message received from mainmode type=%d\n", msg_type);
             
-
-            // pull it from the queue
-            recv(fdset[1].fd, &message, sizeof(message), 0);
-
-//            for (int i = 0; i < sizeof(message); ++i)
-//                printf("%02X", message[i]);
-//            printf("\n");
-            /*
-            struct iovec iov[1] = {{ .iov_base = message, .iov_len = sizeof(message)}};
-
-            struct msghdr header = {0,0,0,0,0,0,0};
-
-            printl("incoming packet from main-mode\n");
-//            while
-            if (recvmsg(fdset[1].fd, &header, MSG_PEEK) != -1)
+            switch (msg_type)
             {
-                printl("received mainmode packet: %d\n", header.msg_iov[0].iov_len);
+                // incoming packet from subscriber
+                case M_PACKET:
+                {
+
+                    // check if we're allowed to send the packet according to our dd rules
+                    uint16_t packet_type = message.packet.type;
+                    Hash* packet_hash = reinterpret_cast<Hash*>(&message.packet.hash);
+
+                    if (dd_specific.find(packet_type) != dd_specific.end())
+                    {
+                        ddmode d = dd_specific[packet_type];
+
+                        bool drop =     d == DD_BLACKHOLE   || d == DD_SQUELCH  || d == DD_SQUELCH_N;
+                        bool dedup =    d == DD_ALL         || d == DD_SUB      || d == DD_DROP;
+
+                        if (dedup && seen_s2p.find(*packet_hash) != seen_s2p.end())
+                            drop = true;
+
+                        // perform drop by doing a null read and breaking out
+                        if (drop)
+                        {
+                            printl("dropping outgoing packet %d according to ddmode\n", packet_type);
+                            recv(fdset[1].fd, 0, 0, 0);
+                            break;
+                        }
+
+                        if (dedup)
+                            seen_s2p.emplace(*packet_hash, time(NULL));
+                    }
+
+                    // check the size of the packet
+                    uint32_t packet_len = message.packet.size;
+                    uint32_t packet_expected = message.packet.size + sizeof(Message);
+
+                    // upgrade to a larger buffer if needed
+                    if (packet_expected > packet_buffer_out_len)
+                    {
+                        if (packet_expected <= PACKET_BUFFER_MAX)
+                        {
+                            free(packet_buffer_out);
+                            packet_buffer_out_len = PACKET_BUFFER_MAX;
+                            packet_buffer_out = (uint8_t*)malloc(packet_buffer_out_len);
+                            if (!packet_buffer_out)
+                            {
+                                printl("Malloc failed while upsizing packet_buffer_out\n");
+                                return EC_BUFFER;
+                            }
+                        }
+                        else
+                        {
+                            printl("Received a packet (from main) which exceeds maximum buffer size. "
+                               "buffer_size=%d packet_size=%d packet_type=%d\n",
+                               PACKET_BUFFER_MAX, packet_expected, packet_type);
+                            return EC_BUFFER;
+                        }
+                    }
+                    else if (packet_expected <= PACKET_BUFFER_NORM && packet_buffer_out_len > PACKET_BUFFER_NORM)
+                    {
+                        // downgrade to the smaller buffer
+                        free(packet_buffer_out);
+                        packet_buffer_out_len = PACKET_BUFFER_NORM;
+                        packet_buffer_out = (uint8_t*)malloc(packet_buffer_out_len);
+                        if (!packet_buffer_out)
+                        {
+                            printl("Malloc failed while downsizing packet_buffer_out\n");
+                            return EC_BUFFER;
+                        }
+                    }
+
+                    // read the packet
+                    if (recv(fdset[1].fd, packet_buffer_out, packet_expected, 0) != packet_expected)
+                    {
+                        printl("error while reading message (type=packet) from main-mode process\n");
+                        return EC_UNIX;
+                    }
+
+                    // forward packet to peer
+                    {
+                        uint8_t header[6];
+                        header[0] = (packet_len >> 24) & 0xff;
+                        header[1] = (packet_len >> 16) & 0xff;
+                        header[2] = (packet_len >> 8) & 0xff;
+                        header[3] =  packet_len & 0xff;
+                        header[4] = (packet_type >> 8) & 0xff;
+                        header[5] =  packet_type & 0xff;
+
+                        SSL_ENQUEUE(header, 6);
+                        SSL_ENQUEUE(packet_buffer + sizeof(Message), packet_len);
+                    }
+                    break;
+                }
+
+                // ddmodes
+                case M_DDMODE:
+                {
+                    printl("processing m_ddmode\n");
+                    if (dd_default == DD_NOT_SET)
+                    {
+                        dd_default = (ddmode)(message.ddmode.mode[0] & 0xFFU);
+                        printl("default ddmode set to %d\n", dd_default);
+                    }
+                    else
+                        printl("not changing dd_default because it was set specifically at cmdline\n");
+
+                    for (int i = 1; i < 62 && message.ddmode.mode[i] != 0; ++i)
+                    {
+                        uint8_t ptype = (uint8_t)(message.ddmode.mode[i] >> 8U);
+                        uint8_t dtype = (uint8_t)(message.ddmode.mode[i] & 0XFFU);
+
+                        if (dd_specific.find(ptype) == dd_specific.end())
+                        {
+                            printl("adding ddmode p=%d d=%d\n", ptype, dtype);
+                            dd_specific.emplace(ptype, (ddmode)dtype);
+                        }
+                        else
+                            printl("skipping ddmode p=%d d=%d, already set\n", ptype, dtype);
+                    }
+
+                    // pull the message this time (no peek)
+                    recv(fdset[1].fd, &message, sizeof(message), 0);
+
+
+                    break;
+                }
+
+                // peer status       
+                case M_PEERSTATUS:
+                {
+                    printl("peer received peer status message, discarding.\n");
+                    break;
+                }
             }
-            else
-                printl("peeking failed\n");
-*/
         }
 
 
@@ -767,6 +885,7 @@ struct msghdr {
 
                     Hash h = hash(packet_type, packet_buffer, packet_len);
 
+                    // todo: check dd rules
                     int seen_before = 0;
                     if (seen_p2s.find(h) == seen_p2s.end())
                         seen_p2s.emplace(h, 1);

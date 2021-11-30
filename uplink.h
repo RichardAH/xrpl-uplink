@@ -31,9 +31,10 @@
 #include "sha-256.h"
 #include "libbase58.h"
 #include "ripple.pb.h"
+#include <time.h>
 
 #define printl(s, ...)\
-    fprintf(stderr, "[%s:%d pid=%d] " s, __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
+    fprintf(stderr, "%d [%s:%d pid=%d] " s, time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
 
 typedef union hash_
 {
@@ -52,6 +53,14 @@ struct HashComparator
 
 
 // All unix-domain piped messages are prefixed with a 128 byte header. The minimum size of a message is 128 bytes.
+
+
+enum MessageType : uint8_t
+{
+    M_PACKET = 0,
+    M_DDMODE = 1,
+    M_PEERSTATUS = 2
+};
 
 /**
  * Packet header is attached to all messages containing a packet in either direction
@@ -121,8 +130,10 @@ union Message
     B            B      DD_BLACKHOLE
 */
 
-enum ddmode : int8_t 
+
+enum ddmode : uint8_t 
 {
+    DD_NOT_SET   =   255,  // placeholder indicating a dd mode was not specified
     DD_INVALID   =   0,
     DD_ALL       =   1,   // de-duplicate packets in both directions
     DD_NONE      =   2,   // do not de-duplicate packets in either direction
@@ -136,6 +147,8 @@ enum ddmode : int8_t
     DD_SQUELCH   =   8,   // drop subscriber's packets, de-duplicate peer's packets
     DD_SQUELCH_N =   9    // drop subscriber's packets, do NOT de-duplicate peer's packets
 };
+
+ddmode parse_dd(char* dd);
 
 enum ercode : int
 {

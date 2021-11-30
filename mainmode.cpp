@@ -19,7 +19,7 @@ int main_mode(
     int peer_accept = -1;
     {
     
-        printf("Peer socket: %s\n", peer_path);
+        printl("peer socket: %s\n", peer_path);
 
         if ((peer_accept = create_unix_accept(peer_path)) < 0)
         {
@@ -44,7 +44,7 @@ int main_mode(
     // task 2: open /var/run/xrpl-uplink/subscriber.sock accept mode
     int subscriber_accept = -1;
     {
-        printf("Subscriber socket: %s\n", subscriber_path);
+        printl("subscriber socket: %s\n", subscriber_path);
 
         if ((subscriber_accept = create_unix_accept(subscriber_path)) < 0)
         {
