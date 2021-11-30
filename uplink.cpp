@@ -148,7 +148,7 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
-    std::map<int32_t, ddmode> dd_specific; // packet_type => de-duplication mode
+    std::map<uint8_t, ddmode> dd_specific; // packet_type => de-duplication mode
 
     char sock_path[PATH_MAX]; memset(sock_path, 0, PATH_MAX);
     char db_path[PATH_MAX];   memset(db_path, 0, PATH_MAX);
@@ -223,7 +223,7 @@ int main(int argc, char** argv)
             }
             else
             {
-                int packet = packet_id(pktype);
+                uint8_t packet = packet_id(pktype);
                 ddmode mode = parse_dd(ddtype);
                 if (packet > -1 && mode != DD_INVALID)
                 {

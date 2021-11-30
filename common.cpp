@@ -57,9 +57,9 @@ int create_unix_accept(char* path)
         fprintf(stderr, "Could not create unix domain socket: %d\n", errno);
         return -EC_UNIX;
     }
-  
-    server_sockaddr.sun_family = AF_UNIX;   
-    strcpy(server_sockaddr.sun_path, path); 
+
+    server_sockaddr.sun_family = AF_UNIX;
+    strcpy(server_sockaddr.sun_path, path);
     size_t len = sizeof(server_sockaddr);
     unlink(path);
 
@@ -72,7 +72,46 @@ int create_unix_accept(char* path)
     return fd;
 }
 
-int32_t packet_id(char* packet_name)
+const char* mtUNKNOWN = "mtUNKNOWN_PACKET";
+
+const char* packet_name(
+        uint8_t packet_type, int padded)
+{
+    switch(packet_type)
+    {
+        case 2:  return (padded ? "mtMANIFESTS               " : "mtMANIFESTS");
+        case 3:  return (padded ? "mtPING                    " : "mtPING");
+        case 5:  return (padded ? "mtCLUSTER                 " : "mtCLUSTER");
+        case 15: return (padded ? "mtENDPOINTS               " : "mtENDPOINTS");
+        case 30: return (padded ? "mtTRANSACTION             " : "mtTRANSACTION");
+        case 31: return (padded ? "mtGET_LEDGER              " : "mtGET_LEDGER");
+        case 32: return (padded ? "mtLEDGER_DATA             " : "mtLEDGER_DATA");
+        case 33: return (padded ? "mtPROPOSE_LEDGER          " : "mtPROPOSE_LEDGER");
+        case 34: return (padded ? "mtSTATUS_CHANGE           " : "mtSTATUS_CHANGE");
+        case 35: return (padded ? "mtHAVE_SET                " : "mtHAVE_SET");
+        case 41: return (padded ? "mtVALIDATION              " : "mtVALIDATION");
+        case 42: return (padded ? "mtGET_OBJECTS             " : "mtGET_OBJECTS");
+        case 50: return (padded ? "mtGET_SHARD_INFO          " : "mtGET_SHARD_INFO");
+        case 51: return (padded ? "mtSHARD_INFO              " : "mtSHARD_INFO");
+        case 52: return (padded ? "mtGET_PEER_SHARD_INFO     " : "mtGET_PEER_SHARD_INFO");
+        case 53: return (padded ? "mtPEER_SHARD_INFO         " : "mtPEER_SHARD_INFO");
+        case 54: return (padded ? "mtVALIDATORLIST           " : "mtVALIDATORLIST");
+        case 55: return (padded ? "mtSQUELCH                 " : "mtSQUELCH");
+        case 56: return (padded ? "mtVALIDATORLISTCOLLECTION " : "mtVALIDATORLISTCOLLECTION");
+        case 57: return (padded ? "mtPROOF_PATH_REQ          " : "mtPROOF_PATH_REQ");
+        case 58: return (padded ? "mtPROOF_PATH_RESPONSE     " : "mtPROOF_PATH_RESPONSE");
+        case 59: return (padded ? "mtREPLAY_DELTA_REQ        " : "mtREPLAY_DELTA_REQ");
+        case 60: return (padded ? "mtREPLAY_DELTA_RESPONSE   " : "mtREPLAY_DELTA_RESPONSE");
+        case 61: return (padded ? "mtGET_PEER_SHARD_INFO_V2  " : "mtGET_PEER_SHARD_INFO_V2");
+        case 62: return (padded ? "mtPEER_SHARD_INFO_V2      " : "mtPEER_SHARD_INFO_V2");
+        case 63: return (padded ? "mtHAVE_TRANSACTIONS       " : "mtHAVE_TRANSACTIONS");
+        case 64: return (padded ? "mtTRANSACTIONS            " : "mtTRANSACTIONS");
+        default: return (padded ? "mtUNKNOWN_PACKET          " : mtUNKNOWN);
+    }
+}
+
+// 0 == invalid
+uint8_t packet_id(char* packet_name)
 {
     if (strcmp("mtMANIFESTS", packet_name) == 0) return 2;
     if (strcmp("mtPING", packet_name) == 0) return 3;
@@ -101,6 +140,6 @@ int32_t packet_id(char* packet_name)
     if (strcmp("mtPEER_SHARD_INFO_V2", packet_name) == 0) return 62;
     if (strcmp("mtHAVE_TRANSACTIONS", packet_name) == 0) return 63;
     if (strcmp("mtTRANSACTIONS", packet_name) == 0) return 64;
-    return -1;
+    return 0;
 }
 

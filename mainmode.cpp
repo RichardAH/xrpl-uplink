@@ -10,7 +10,7 @@ inline pid_t my_pid;
 int main_mode(
         char* ip, int port, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
-        ddmode dd_default, std::map<int32_t, ddmode>& dd_specific)
+        ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific)
 {
 
     my_pid = getpid();
@@ -102,7 +102,8 @@ int main_mode(
             printl("Accept socket error or hangup.\n");
             break;
         }
-        printl("poll result %d\n", poll_result);
+        
+        //printl("poll result %d\n", poll_result);
 
         // process accepts
         if (fdset[0].revents & POLLIN || fdset[1].revents & POLLIN)
@@ -113,6 +114,10 @@ int main_mode(
                 ((new_fd = accept(peer_accept, NULL, NULL)) > -1) ||
                 ((new_fd = accept(subscriber_accept, NULL, NULL)) > -1 && (is_subscriber = 1)))
             {
+
+                // make new fd non-blocking
+                fd_set_flags(new_fd, O_NONBLOCK);
+
                 // insert
                 printl("Accepting connection fd=%d\n", new_fd);
                 int found = -1;
@@ -136,18 +141,68 @@ int main_mode(
                     subscribers.emplace(new_fd);
                     is_subscriber = 0;
                 }
+                else    // peer-mode connecting in, send dd info
+                {
+                    Message m;
+                    memset(&m, 0, sizeof(Message));
+                    m.ddmode.flags = 1U << 28U;
+                    
+                    // default is the first entry, high byte is 0
+                    m.ddmode.mode[0] = dd_default;
+
+                    int i = 0;
+                    for (auto const& e: dd_specific)
+                        m.ddmode.mode[i++] = (((uint16_t)e.first) << 8U) | ((uint16_t)e.second);
+
+                    if (write(new_fd, (void*)(&m), sizeof(Message)) == -1)
+                    {
+                        printl("failed to send ddmode message to newly accepted peer-mode client\n");
+                        close(new_fd);
+                    }
+                }
             }
         }
 
+/*
+struct iovec {                    // Scatter/gather array items
+    void  *iov_base;              // Starting address 
+    size_t iov_len;               // Number of bytes to transfer 
+};
+
+struct msghdr {
+    void         *msg_name;       // optional address 
+    socklen_t     msg_namelen;    // size of address 
+    struct iovec *msg_iov;        // scatter/gather array 
+    size_t        msg_iovlen;     // # elements in msg_iov 
+    void         *msg_control;    // ancillary data, see below 
+    size_t        msg_controllen; // ancillary data buffer len 
+    int           msg_flags;      // flags on received message 
+};
+*/
+
         // process incoming messages
         uint8_t message_header[128];
+        for (int i = 2; i < MAX_FDS; ++i)
         {
-    
+            if (fdset[i].fd >= 0 && fdset[i].revents & POLLIN)
+            {
 
+                struct msghdr header;
+                ssize_t rc = recvmsg(fdset[i].fd, &header, MSG_PEEK);
+
+                if (rc <= 0)
+                {
+                    // disconnect peer
+                    // set fd negative
+                    // remove from set if applicable
+                    continue;
+                }
+
+                // process MessageUnknown
+
+            }
         }
 
-
-        sleep(1);
     }
     return 0;
 }
