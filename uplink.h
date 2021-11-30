@@ -32,10 +32,16 @@
 #include "libbase58.h"
 #include "ripple.pb.h"
 #include <time.h>
+#include <sys/uio.h>
 
 #define printl(s, ...)\
-    fprintf(stderr, "%d [%s:%d pid=%d] " s, time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
+    fprintf(stderr, "%lu [%s:%d pid=%d] " s, time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
 
+#define COPY32(x)  x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12],x[13],x[14],x[15],\
+    x[16],x[17],x[18],x[19],x[20],x[21],x[22],x[23],x[24],x[25],x[26],x[27],x[28],x[29],x[30],x[31]
+
+#define FORMAT32 "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "\
+                 "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "
 typedef union hash_
 {
     uint8_t b[32];
@@ -163,7 +169,8 @@ enum ercode : int
     EC_SODIUM       = 8,    // problem loading or calling libsodium
     EC_SECP256K1    = 9,    // problem with a libsecp256k1 call
     EC_BUFFER      = 10,    // internal buffer was insufficiently large for an operation
-    EC_ADDR        = 11     // invalid address or hostname specified / could not resolve
+    EC_ADDR        = 11,    // invalid address or hostname specified / could not resolve
+    EC_PROTO       = 12     // something illegal according to xrpl protocol rules happened
 
 };
 

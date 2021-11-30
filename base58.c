@@ -16,20 +16,23 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <stdio.h>
+
 #include "libbase58.h"
 extern "C" {
 bool (*b58_sha256_impl)(void *, const void *, size_t) = NULL;
 
 
-static const int8_t b58digits_map[] = {
-	-1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
-	-1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
-	-1,-1,-1,-1,-1,-1,-1,-1, -1,-1,-1,-1,-1,-1,-1,-1,
-	-1, 0, 1, 2, 3, 4, 5, 6,  7, 8,-1,-1,-1,-1,-1,-1,
-	-1, 9,10,11,12,13,14,15, 16,-1,17,18,19,20,21,-1,
-	22,23,24,25,26,27,28,29, 30,31,32,-1,-1,-1,-1,-1,
-	-1,33,34,35,36,37,38,39, 40,41,42,43,-1,44,45,46,
-	47,48,49,50,51,52,53,54, 55,56,57,-1,-1,-1,-1,-1,
+static const int8_t b58digits_map[] = 
+{
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    -1,50,33,7,21,41,40,27,45,8,-1,-1,-1,-1,-1,-1,
+    -1,54,10,38,12,14,47,15,16,-1,17,18,19,20,13,-1,
+    22,23,24,25,26,11,28,29,30,31,32,-1,-1,-1,-1,-1,
+    -1,5,34,35,36,37,6,39,3,49,42,43,-1,44,4,46,
+    1,48,0,2,51,52,53,9,55,56,57,-1,-1,-1,-1,-1
 };
 
 typedef uint64_t b58_maxint_t;
@@ -39,6 +42,9 @@ static const b58_almostmaxint_t b58_almostmaxint_mask = ((((b58_maxint_t)1) << b
 
 bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 {
+
+    printf("b58tobin: %s\n", b58);
+
 	size_t binsz = *binszp;
 	const unsigned char *b58u = (const unsigned char*) b58;
 	unsigned char *binu = (unsigned char*)bin;
@@ -50,16 +56,16 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 	uint8_t bytesleft = binsz % sizeof(b58_almostmaxint_t);
 	b58_almostmaxint_t zeromask = bytesleft ? (b58_almostmaxint_mask << (bytesleft * 8)) : 0;
 	unsigned zerocount = 0;
-	
+
+    printf("bytesleft: %d\n", bytesleft) ;   
 	if (!b58sz)
 		b58sz = strlen(b58);
-	
-	for (i = 0; i < outisz; ++i) {
+
+	for (i = 0; i < outisz; ++i)
 		outi[i] = 0;
-	}
 	
 	// Leading zeros, just count
-	for (i = 0; i < b58sz && b58u[i] == '1'; ++i)
+	for (i = 0; i < b58sz && b58u[i] == 'r'; ++i)
 		++zerocount;
 	
 	for ( ; i < b58sz; ++i)
@@ -71,6 +77,7 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 			// Invalid base58 digit
 			return false;
 		c = (unsigned)b58digits_map[b58u[i]];
+
 		for (j = outisz; j--; )
 		{
 			t = ((b58_maxint_t)outi[j]) * 58 + c;
@@ -89,6 +96,7 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 	if (bytesleft) {
 		for (i = bytesleft; i > 0; --i) {
 			*(binu++) = (outi[0] >> (8 * (i - 1))) & 0xff;
+            printf("%02x\n", *(binu-1));
 		}
 		++j;
 	}
@@ -109,7 +117,8 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 		--*binszp;
 	}
 	*binszp += zerocount;
-	
+
+printf("here\n");    
 	return true;
 }
 
