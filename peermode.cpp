@@ -754,8 +754,8 @@ int peer_mode(
                                     printl("peer key is: %s\n", pubkey);
 
 
-                                    uint8_t buffer2[128];
-                                    size_t bytes_written = sizeof(buffer);
+                                    uint8_t buffer2[38];
+                                    size_t bytes_written = sizeof(buffer2);
                                     
                                     bool b58rc = b58tobin(buffer2, &bytes_written, pubkey, strlen(pubkey)); 
                                     if (!(b58rc && bytes_written >= 33))
@@ -764,15 +764,9 @@ int peer_mode(
                                         return EC_PROTO;
                                     }
 
-                                    printf("base58 result: %s\n", (b58rc ? "true" : "false"));
-                                    for (int ii = 0; ii < 33; ++ii)
-                                        printf("%02x", buffer2[ii]);
-                                    printf("\n");
-                                    /*
-                                    printl("peer key raw: " FORMAT32, COPY32(buffer));
-                                    for (int z = 1; z < 33; ++z)
-                                        peer_pubkey[z - 1] = buffer[z];
-*/
+                                    for (int z = 2; z < 34; ++z)
+                                        peer_pubkey[z - 2] = buffer2[z];
+                                    printl("peer key raw: " FORMAT32 "\n", COPY32(peer_pubkey));
                                     found_key = 1;
                                     break;
                                 }

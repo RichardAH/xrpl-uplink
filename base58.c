@@ -42,9 +42,6 @@ static const b58_almostmaxint_t b58_almostmaxint_mask = ((((b58_maxint_t)1) << b
 
 bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 {
-
-    printf("b58tobin: %s\n", b58);
-
 	size_t binsz = *binszp;
 	const unsigned char *b58u = (const unsigned char*) b58;
 	unsigned char *binu = (unsigned char*)bin;
@@ -57,7 +54,6 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 	b58_almostmaxint_t zeromask = bytesleft ? (b58_almostmaxint_mask << (bytesleft * 8)) : 0;
 	unsigned zerocount = 0;
 
-    printf("bytesleft: %d\n", bytesleft) ;   
 	if (!b58sz)
 		b58sz = strlen(b58);
 
@@ -96,7 +92,6 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 	if (bytesleft) {
 		for (i = bytesleft; i > 0; --i) {
 			*(binu++) = (outi[0] >> (8 * (i - 1))) & 0xff;
-            printf("%02x\n", *(binu-1));
 		}
 		++j;
 	}
@@ -118,7 +113,6 @@ bool b58tobin(void *bin, size_t *binszp, const char *b58, size_t b58sz)
 	}
 	*binszp += zerocount;
 
-printf("here\n");    
 	return true;
 }
 
