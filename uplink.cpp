@@ -266,6 +266,14 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
+
+    int rnd_fd = open("/dev/urandom", O_RDONLY);
+    if (rnd_fd < 0)
+    {
+        printl("can't open /dev/urandom");
+        return EC_RNG;
+    }
+
     // load the private key or create specified keyfile if it doesn't already exist
     uint8_t key[32];
     if (access(key_path, F_OK) == 0)
@@ -289,8 +297,7 @@ int main(int argc, char** argv)
             printl("Could not open keyfile %s for writing\n", key_path);
             return EC_PARAMS;
         }
-        int rnd = open("/dev/urandom", O_RDONLY);
-        if (rnd < 0 || read(rnd, key, 32) != 32) // RH TODO: not every random 32 byte seq is a valid secp256k1 key
+        if (read(rnd_fd, key, 32) != 32) // RH TODO: not every random 32 byte seq is a valid secp256k1 key
         {
             printl("Could read /dev/urandom to generate key\n");
             return EC_PARAMS;
@@ -301,16 +308,16 @@ int main(int argc, char** argv)
             printl("Could not write key to keyfile %s\n", key_path);
             return EC_PARAMS;
         }
-        close(rnd);
         close(fd);
     }
+    
 
     int peer_max = 0;
 
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(host, port, peer_path, key, dd_default, dd_specific);
+        return peer_mode(host, port, peer_path, key, dd_default, dd_specific, rnd_fd);
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max >= 1)
     {
@@ -341,7 +348,7 @@ int main(int argc, char** argv)
 
         // continue to main mode
         return main_mode(host, port, peer_max, peer_path, subscriber_path, db_path, key,
-                dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific);
+                dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific, rnd_fd);
     }
     else
     {

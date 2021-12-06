@@ -2,7 +2,7 @@
 
 Hash hash(int packet_type, const void* mem, int len)
 {
-    Hash h { .q = { 0, 0, 0, packet_type } };
+    Hash h { .q = { 0, 0, 0, (uint64_t)(packet_type) } };
     uint64_t state = 0;
     uint8_t* ptr = (uint8_t*)mem;
     int i = 0, j = 0;
@@ -11,6 +11,7 @@ Hash hash(int packet_type, const void* mem, int len)
     {
         state = _mm_crc32_u64(state, *(reinterpret_cast<uint64_t*>(ptr + i)));
         h.d[j % 8] ^= state;
+        h.q[j % 4] ^= *(reinterpret_cast<uint64_t*>(ptr + i));
     }
 
     if (len == i)
@@ -168,3 +169,57 @@ uint8_t packet_id(char* packet_name)
     return 0;
 }
 
+
+int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, int iterations)
+{
+    static uint32_t seed = -1;
+
+    if (seed == -1)
+    {
+        read(rnd_fd, &seed, sizeof(seed));
+        srand(seed ^ time(NULL));
+    }
+
+
+    if (iterations > EVICTION_MAX)
+        iterations = EVICTION_MAX;
+
+    uint32_t size = map.size();
+
+    std::set<uint32_t> rnd_set;
+
+    for (int i = 0; i < iterations; ++i)
+        rnd_set.emplace(rand() % size);
+
+
+    int upto = 0;
+
+    uint32_t ct = time(NULL);
+
+    std::set<Hash, HashComparator> to_evict;
+
+    auto iter = map.begin();
+
+    uint32_t last = 0;
+    for (auto rnd : rnd_set)
+    {
+        if (rnd - last == 0)
+            continue;
+        
+        std::advance(iter, rnd - last);
+            
+        if (iter == map.end())
+            break;
+        if (iter->second + EVICTION_TIME < ct)
+            to_evict.emplace(iter->first);
+        last = rnd;
+    }    
+
+    if (to_evict.size() > 0)
+        printl("evicting %ld entries from map[%d]\n", to_evict.size(), size);
+
+    for (auto const& i : to_evict)
+        map.erase(i);
+
+    return EC_SUCCESS;
+}

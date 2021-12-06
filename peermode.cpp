@@ -6,16 +6,6 @@
 #include <openssl/pem.h>
 #include <secp256k1.h>
 
-#define POLL_TIMEOUT 2000 /* ms */
-#define DEFAULT_BUF_SIZE 64
-
-#define DEBUG 1
-#define VERBOSE_DEBUG 1
-#define HTTP_BUFFER_SIZE 4096
-#define SSL_BUFFER_SIZE 65536
-#define PACKET_BUFFER_NORM 65536
-#define PACKET_BUFFER_MAX  67108864
-
 
 // ---------
 // PEER MODE
@@ -24,11 +14,6 @@
 // In this file: peer refers to TCP endpoint connecting out to the XRPL node.
 // RH NOTE: `peer_path` (uplink.cpp) == `main_path` (peermode.cpp)
 //           typically: /var/run/xrpl-uplink/peer.sock
-
-inline pid_t my_pid;
-
-std::map<Hash, uint32_t, HashComparator> seen_p2s;
-std::map<Hash, uint32_t, HashComparator> seen_s2p;
 
 #define print_hash(h, before, after)\
 {\
@@ -170,11 +155,13 @@ int generate_upgrade(
     }
 }
 
-
 int peer_mode(
     char* ip, int port, char* main_path, uint8_t* key,
-    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific)
+    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
+
+    std::map<Hash, uint32_t, HashComparator> seen_p2s;
+    std::map<Hash, uint32_t, HashComparator> seen_s2p;
 
     my_pid = getpid();
 
@@ -417,7 +404,7 @@ int peer_mode(
         // execution to here means the poll returned with one or more active fds / events
 
         // check if the peer socket died
-        if (fdset[0].revents & (POLLERR | POLLHUP | POLLNVAL) || read(peer_fd, 0, 0))
+        if ((fdset[0].revents & (POLLERR | POLLHUP | POLLNVAL)) || read(peer_fd, 0, 0))
         {
             int error = 0;
             socklen_t errlen = sizeof(error);
@@ -428,7 +415,7 @@ int peer_mode(
         }
 
         // check if main socket died
-        if (fdset[1].revents & (POLLERR | POLLHUP | POLLNVAL) || read(main_fd, 0, 0))
+        if ((fdset[1].revents & (POLLERR | POLLHUP | POLLNVAL)) || read(main_fd, 0, 0))
         {
             int error = 0;
             socklen_t errlen = sizeof(error);
@@ -436,6 +423,29 @@ int peer_mode(
             printl("Main connection lost %s, socket err: %d, errno: %d\n", main_path, error, errno);
 
             return EC_UNIX;
+        }
+        
+        // check if there are pending bytes to write from the SSL buffer to the TCP socket
+        if ((fdset[0].revents & POLLOUT) && ssl_write_len)
+        {
+            ssize_t bytes_written = write(peer_fd, ssl_write_buf, ssl_write_len);
+            if (DEBUG)
+                printl("RAW outgoing data %ld\n", bytes_written);
+
+            if (bytes_written <= 0)
+            {
+                printl("Could not write encrypted bytes to socket\n");
+                //return EC_SSL;
+            }
+            else
+            {
+                if (bytes_written < ssl_write_len)
+                    memmove(ssl_write_buf, ssl_write_buf + bytes_written, ssl_write_len - bytes_written);
+                ssl_write_len -= bytes_written;
+                ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
+                if (DEBUG)
+                    printl("RAW bytes remaining to write: %ld\n", ssl_write_len);
+            }
         }
 
         // check if there are pending messages to read from main-mode process
@@ -491,7 +501,10 @@ int peer_mode(
                         }
 
                         if (dedup)
+                        {
                             seen_s2p.emplace(*packet_hash, time(NULL));
+                            random_eviction(seen_s2p, rnd_fd, EVICTION_SPINS);
+                        }
                     }
 
                     // check the size of the packet
@@ -552,6 +565,7 @@ int peer_mode(
 
                         SSL_ENQUEUE(header, 6);
                         SSL_ENQUEUE(packet_buffer + sizeof(Message), packet_len);
+                        SSL_FLUSH_OUT();
                     }
                     break;
                 }
@@ -599,60 +613,34 @@ int peer_mode(
         }
 
 
-        // check if there are pending bytes to write from the SSL buffer to the TCP socket
-        if (fdset[0].revents & POLLOUT && ssl_write_len)
-        {
-            ssize_t bytes_written = write(peer_fd, ssl_write_buf, ssl_write_len);
-            if (DEBUG)
-                printl("RAW outgoing data %ld\n", bytes_written);
-
-            if (bytes_written <= 0)
-            {
-                printl("Could not write encrypted bytes to socket\n");
-                return EC_SSL;
-            }
-
-            if (bytes_written < ssl_write_len)
-                memmove(ssl_write_buf, ssl_write_buf + bytes_written, ssl_write_len - bytes_written);
-            ssl_write_len -= bytes_written;
-            ssl_write_buf = (char*)realloc(ssl_write_buf, ssl_write_len);
-            if (DEBUG)
-                printl("RAW bytes remaining to write: %ld\n", ssl_write_len);
-        }
-
         // check if there are incoming bytes from TCP
         if (fdset[0].revents & POLLIN)
+        do
         {
 
             if (DEBUG && VERBOSE_DEBUG)
                 printl("incoming data - connection_upgraded: %d\n", connection_upgraded);
 
 
-
             for (int loop_count = 0; ; ++loop_count)
             {
                 ssize_t bytes_read = read(peer_fd, ssl_buf, sizeof(ssl_buf));
+                
                 if (bytes_read == -1 && errno == EAGAIN)
                     break;
 
-                if (DEBUG && VERBOSE_DEBUG)
-                {
-                    printl("RAW incoming data %d bytes from peer:\n", bytes_read);
-//                    for (int i = 0; i < bytes_read; ++i)
-//                        fprintf(stderr, "%02X", (uint8_t)(ssl_buf[i]));
-//                    fprintf(stderr, "\n");
-                }
-
                 if (bytes_read < 0 || (bytes_read == 0 && loop_count == 0))
                 {
-                    printl("Could not read raw bytes from TCP socket: "
-                            "bytes_read=%d, loop_count=%d\n", bytes_read, loop_count);
+                    printl("peer %s dropped connection\n", ip);
                     return EC_TCP;
                 }
 
                 if (bytes_read == 0)
                     break;
 
+                if (DEBUG && VERBOSE_DEBUG)
+                    printl("RAW incoming data %ld bytes from peer:\n", bytes_read);
+                
                 ssize_t bytes_written = BIO_write(rbio, ssl_buf, bytes_read);
                 if (bytes_written < 0 || (bytes_written == 0 && loop_count == 0))
                 {
@@ -660,13 +648,10 @@ int peer_mode(
                     return EC_SSL;
                 }
 
-
                 if (DEBUG && VERBOSE_DEBUG)
-                {
-                    printl("wrote %d RAW bytes to SSL bio\n", bytes_written);
-                }
-
+                    printl("wrote %ld RAW bytes to SSL bio\n", bytes_written);
             }
+
 
             if (!SSL_is_init_finished(ssl))
             {
@@ -675,7 +660,6 @@ int peer_mode(
                 SSL_FLUSH_OUT();
                 continue;
             }
-
 
             if (connection_upgraded == 0)
             {
@@ -790,7 +774,7 @@ int peer_mode(
                     if (ec == 2)
                     {
                         if (DEBUG && VERBOSE_DEBUG)
-                            printl("SSL want_read during peek, bytes_read=%d\n", bytes_read);
+                            printl("SSL want_read during peek, bytes_read=%ld\n", bytes_read);
                         continue;
                     }
                     else
@@ -817,10 +801,10 @@ int peer_mode(
                 do {
                     packet_received = 0;
                     packet_expected =
-                        (header_buffer[0] << 24) +
-                        (header_buffer[1] << 16) +
-                        (header_buffer[2] << 8) +
-                        header_buffer[3];
+                        (((uint32_t)header_buffer[0]) << 24U) +
+                        (((uint32_t)header_buffer[1]) << 16U) +
+                        (((uint32_t)header_buffer[2]) <<  8U) +
+                        (((uint32_t)header_buffer[3]) <<  0U);
 
                     int header_size = 6;
                     packet_uncompressed = 0;
@@ -833,22 +817,23 @@ int peer_mode(
                             // in this rare edge case a compressed packet has a partially sent header
                             // wait for the whole header to arrive before continuing
                             packet_expected = 0;
+                            packet_type = -1;
                             break;
                         }
 
                         packet_expected &= 0x0FFFFFFFU;
                         packet_uncompressed =
-                            (header_buffer[6] << 24) +
-                            (header_buffer[7] << 16) +
-                            (header_buffer[8] << 8) +
-                            header_buffer[9];
+                            (((uint32_t)header_buffer[6]) << 24U) +
+                            (((uint32_t)header_buffer[7]) << 16U) +
+                            (((uint32_t)header_buffer[8]) <<  8U) +
+                            (((uint32_t)header_buffer[9]) <<  0U);
+
                         header_size = 10;
                     }
 
-                    packet_type = (header_buffer[4] << 8) + header_buffer[5];
+                    packet_type = ((uint16_t)(header_buffer[4] << 8U)) + (uint16_t)(header_buffer[5]);
 
-                    if (DEBUG)
-                        printl("Peeked packet type %d, size: %d\n", packet_type, packet_expected);
+                    printl("Peeked packet type %d, size: %d\n", packet_type, packet_expected);
 
                     // clear out the header bytes by actually reading them this time instead of peeking
                     if (!((rc = SSL_read_ex(ssl, header_buffer, header_size, &bytes_read)) > 0) &&
@@ -893,10 +878,10 @@ int peer_mode(
                         }
                     }
 
-
-
                     // now we're ready to drop through to a payload read
                 } while (0);
+                else
+                    printl("!Peeked bytes read: %ld\n", bytes_read);
 
                 int ec = SSL_get_error(ssl, rc);
 
@@ -943,25 +928,38 @@ int peer_mode(
                 do
                 {
                     uint32_t packet_len = packet_expected;
+
+                    printl("Packet route_to_subscribers type=%d size=%d\n", packet_type, packet_len);
                     
                     if (packet_type == 3) //mtPING packets are processed directly
                     {
-                        protocol::TMPing ping;
-                        ping.ParseFromArray(packet_buffer, packet_len);
-                        ping.set_type(protocol::TMPing_pingType_ptPONG);
-                        ping.SerializeToArray(packet_buffer_out, packet_buffer_out_len);
+                        printl("\n\n\ngot  PING\n\n\n");
 
+                        protocol::TMPing ping;
+                        if (!ping.ParseFromArray(packet_buffer, packet_len))
+                            printl("failed to deserialize mtPING");
+
+                        ping.set_type(protocol::TMPing_pingType_ptPONG);
+                        if (!ping.SerializeToArray(packet_buffer_out, packet_len))
+                            printl("failed to serialize mtPONG");
+
+                        printh(packet_buffer, packet_len, "in  ping:");
+                        printh(packet_buffer_out, packet_len, "out pong:");
                         
                         uint8_t header[6];
-                        header[0] = (packet_len >> 24) & 0xff;
-                        header[1] = (packet_len >> 16) & 0xff;
-                        header[2] = (packet_len >> 8) & 0xff;
-                        header[3] =  packet_len & 0xff;
-                        header[4] = (packet_type >> 8) & 0xff;
-                        header[5] =  packet_type & 0xff;
+                        header[0] = (packet_len >> 24U) & 0xFFU;
+                        header[1] = (packet_len >> 16U) & 0xFFU;
+                        header[2] = (packet_len >>  8U) & 0xFFU;
+                        header[3] = (packet_len >>  0U) & 0xFFU;
+                        header[4] = (packet_type >> 8U) & 0xFFU;
+                        header[5] = (packet_type >> 0U) & 0xFFU;
 
                         SSL_ENQUEUE(header, 6);
-                        SSL_ENQUEUE(packet_buffer_out, packet_buffer_out_len);
+                        SSL_ENQUEUE(packet_buffer_out, packet_len);
+                        SSL_FLUSH_OUT();
+
+                        printl("\n\n\nsent PONG\n\n\n");
+
                     }
 
                     
@@ -997,25 +995,25 @@ int peer_mode(
                         }
 
                         if (dedup)
+                        {
                             seen_p2s.emplace(packet_hash, time(NULL));
+                            random_eviction(seen_p2s, rnd_fd, EVICTION_SPINS);
+                        }
                     }
 
-
-                    if (DEBUG)
-                        printl("Packet route_to_subscribers type=%d size=%d ", packet_type, packet_len);
 
 
                     // construct and forward to main-mode
                     {
                         uint32_t send_len = packet_len + sizeof(Message);
-                        
+                    
                         MessagePacket m = 
                         {
                             .flags = 0,
                             .size = packet_len,
-                            .timestamp = time(NULL),
-                            .type = packet_type,
-                            .source_port = port,
+                            .timestamp = (uint32_t)(time(NULL)),
+                            .type = (uint16_t)(packet_type),
+                            .source_port = (uint16_t)(port),
                             .source_addr = {
                                0, 0, 0, 0, 0, 0, 0, 0,0, 0,
                                0xFFU, 0xFFU,
@@ -1033,38 +1031,20 @@ int peer_mode(
                         };
 
                         ssize_t bytes_written = writev(main_fd, iov, 2);
-                        printl("packet written to main: %d bytes written to socket\n", bytes_written);
+                        printl("packet written to main: %ld bytes written to socket\n", bytes_written);
 
                     }
                 } while (0);
-
-
-/*                                                                                                                     
-struct iovec {                    // Scatter/gather array items                                                        
-    void  *iov_base;              // Starting address                                                                  
-    size_t iov_len;               // Number of bytes to transfer                                                       
-};                                                                                                                     
-                                                                                                                       
-struct msghdr {                                                                                                        
-    void         *msg_name;       // optional address                                                                  
-    socklen_t     msg_namelen;    // size of address                                                                   
-    struct iovec *msg_iov;        // scatter/gather array                                                              
-    size_t        msg_iovlen;     // # elements in msg_iov                                                             
-    void         *msg_control;    // ancillary data, see below                                                         
-    size_t        msg_controllen; // ancillary data buffer len                                                         
-    int           msg_flags;      // flags on received message                                                         
-};                                                                                                                     
-*/                                                                                                                     
-     
 
                 // reset
                 packet_type = -1;
                 packet_expected = 0;
                 packet_uncompressed = 0;
                 packet_received = 0;
-                continue;
             }
-        }
+        } while (0);
+        
+
 
             // task 2: continue looping until full packet received in buffer
             // task 3: process any pings

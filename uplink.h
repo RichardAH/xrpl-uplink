@@ -7,6 +7,20 @@
 #define KEY_FN              "peer.key"
 #define USER_AGENT          "xrpl-uplink"
 #define MAX_FDS 1024
+#define POLL_TIMEOUT 2000 /* ms */
+#define DEFAULT_BUF_SIZE 64
+#define DEBUG 1
+#define VERBOSE_DEBUG 1
+#define HTTP_BUFFER_SIZE 4096
+#define SSL_BUFFER_SIZE 65536
+#define PACKET_BUFFER_NORM 65536
+#define PACKET_BUFFER_MAX  67108864
+
+// seen hash cache eviction parameters
+#define EVICTION_MAX 16
+#define EVICTION_TIME 60 // eviction active after 500 seconds
+#define EVICTION_SPINS 5 // attempt to randomly evict 5 old entries for each inserted key
+
 #include <stdio.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
@@ -33,15 +47,39 @@
 #include "ripple.pb.h"
 #include <time.h>
 #include <sys/uio.h>
+#include <iterator>
+
 
 #define printl(s, ...)\
-    fprintf(stderr, "%lu [%s:%d pid=%d] " s, time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
+    fprintf(stderr, "%lu [%s:%d\tpid=%d] " s, time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__)
+
+#define printh(ptr, ptrlen, s, ...)\
+{\
+    char buf[256]; buf[0] = '\0';\
+    sprintf(buf, "%lu [%s:%d pid=%d] ", time(NULL), __FILE__, __LINE__, my_pid);\
+    fprintf(stderr, "%s" s "\n", buf, ##__VA_ARGS__);\
+    for (char* x = buf; *x; ++x)\
+        *x = ' ';\
+    for (int j = 0; j < ptrlen; j++)\
+    {\
+        if (j % 16 == 0)\
+            fprintf(stderr, "%s0x%08X:\t", buf, j);\
+        fprintf(stderr, "%02X%s", ptr[j],\
+            (j % 16 == 15 ? "\n" :\
+            (j % 4 == 3 ? "  " :\
+            (j % 2 == 1 ? " " : ""))));\
+    }\
+    fprintf(stderr, "\n");\
+}
 
 #define COPY32(x)  x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12],x[13],x[14],x[15],\
     x[16],x[17],x[18],x[19],x[20],x[21],x[22],x[23],x[24],x[25],x[26],x[27],x[28],x[29],x[30],x[31]
 
 #define FORMAT32 "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "\
                  "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "
+
+inline pid_t my_pid;
+
 typedef union hash_
 {
     uint8_t b[32];
@@ -170,9 +208,12 @@ enum ercode : int
     EC_SECP256K1    = 9,    // problem with a libsecp256k1 call
     EC_BUFFER      = 10,    // internal buffer was insufficiently large for an operation
     EC_ADDR        = 11,    // invalid address or hostname specified / could not resolve
-    EC_PROTO       = 12     // something illegal according to xrpl protocol rules happened
+    EC_PROTO       = 12,    // something illegal according to xrpl protocol rules happened
+    EC_RNG         = 13     // could not open or generate rng
 
 };
+
+int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, int iterations);
 
 int fd_set_flags(int fd, int new_flags);
 int create_unix_accept(char* path);
@@ -180,11 +221,11 @@ uint8_t packet_id(char* packet_name);
 
 int peer_mode(
     char* ip, int port, char* main_path, uint8_t* key, 
-    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific);
+    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 int main_mode(
     char* ip, int port, int peer_max,
     char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
-    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific);
+    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 Hash hash(int bias, const void* mem, int len);
