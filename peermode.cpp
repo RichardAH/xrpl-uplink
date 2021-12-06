@@ -349,12 +349,12 @@ int peer_mode(
     while(1)
     {
 
-        SSL_FLUSH_OUT();
-
         // check if there are enqueued bytes ready to be encrypted
         while (ssl_encrypt_len > 0)
         {
             int bytes_written = SSL_write(ssl, ssl_encrypt_buf, ssl_encrypt_len);
+
+            printl("ssl wrote encrypted bytes %d to bio\n", bytes_written);
 
             if (bytes_written > 0)
             {
@@ -377,6 +377,7 @@ int peer_mode(
               break;
         }
 
+        SSL_FLUSH_OUT();
 
         // setup and execute poll such that a free outgoing buffer will trigger if we have pending bytes to write out
         fdset[0].events =  POLLERR | POLLHUP | POLLNVAL | POLLIN |
@@ -565,7 +566,6 @@ int peer_mode(
 
                         SSL_ENQUEUE(header, 6);
                         SSL_ENQUEUE(packet_buffer + sizeof(Message), packet_len);
-                        SSL_FLUSH_OUT();
                     }
                     break;
                 }
@@ -626,11 +626,11 @@ int peer_mode(
             {
                 ssize_t bytes_read = read(peer_fd, ssl_buf, sizeof(ssl_buf));
                 
-                if (bytes_read == -1 && errno == EAGAIN)
-                    break;
-
-                if (bytes_read < 0 || (bytes_read == 0 && loop_count == 0))
+                if (bytes_read == -1)
                 {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        break;
+
                     printl("peer %s dropped connection\n", ip);
                     return EC_TCP;
                 }
@@ -650,6 +650,8 @@ int peer_mode(
 
                 if (DEBUG && VERBOSE_DEBUG)
                     printl("wrote %ld RAW bytes to SSL bio\n", bytes_written);
+
+                SSL_FLUSH_OUT();
             }
 
 
@@ -679,7 +681,6 @@ int peer_mode(
                 );
 
                 SSL_ENQUEUE(upgrade_request, len);
-                SSL_FLUSH_OUT();
                 connection_upgraded = 1;
 
                 // fall through
@@ -833,7 +834,8 @@ int peer_mode(
 
                     packet_type = ((uint16_t)(header_buffer[4] << 8U)) + (uint16_t)(header_buffer[5]);
 
-                    printl("Peeked packet type %d, size: %d\n", packet_type, packet_expected);
+                    if (DEBUG && VERBOSE_DEBUG)
+                        printl("Peeked packet type %d, size: %d\n", packet_type, packet_expected);
 
                     // clear out the header bytes by actually reading them this time instead of peeking
                     if (!((rc = SSL_read_ex(ssl, header_buffer, header_size, &bytes_read)) > 0) &&
@@ -842,6 +844,9 @@ int peer_mode(
                         printl("SSL error=%d during packet read\n", SSL_get_error(ssl, rc));
                         return EC_SSL;
                     }
+                    else
+                        if (DEBUG && VERBOSE_DEBUG)
+                            printh(header_buffer, bytes_read, "header:");
 
                     // upgrade to a larger buffer if needed
                     if (packet_expected > packet_buffer_len)
@@ -905,8 +910,9 @@ int peer_mode(
                 int32_t remaining = packet_expected - packet_received;
                 size_t bytes_read = 0;
                 while (remaining > 0 && (rc =
-                    SSL_read_ex(ssl, packet_buffer + remaining,
-                    packet_buffer_len - packet_received, &bytes_read) > 0) &&
+                    SSL_read_ex(ssl, packet_buffer + packet_received,
+                    remaining < (packet_buffer_len - packet_received) ? remaining :
+                        (packet_buffer_len - packet_received), &bytes_read) > 0) &&
                     bytes_read > 0)
                 {
                     packet_received += bytes_read;
@@ -929,40 +935,196 @@ int peer_mode(
                 {
                     uint32_t packet_len = packet_expected;
 
-                    printl("Packet route_to_subscribers type=%d size=%d\n", packet_type, packet_len);
+                    if (DEBUG)
+                        printl("packet route_to_subscribers type=%d size=%d\n", packet_type, packet_len);
                     
-                    if (packet_type == 3) //mtPING packets are processed directly
+                    if (packet_type == mtPING) //mtPING packets are processed directly
                     {
-                        printl("\n\n\ngot  PING\n\n\n");
+                        if (DEBUG)
+                            printl("\n\n\ngot  PING\n\n\n");
 
                         protocol::TMPing ping;
                         if (!ping.ParseFromArray(packet_buffer, packet_len))
-                            printl("failed to deserialize mtPING");
+                            printl("failed to deserialize mtPING\n");
 
                         ping.set_type(protocol::TMPing_pingType_ptPONG);
                         if (!ping.SerializeToArray(packet_buffer_out, packet_len))
-                            printl("failed to serialize mtPONG");
+                            printl("failed to serialize mtPONG\n");
 
-                        printh(packet_buffer, packet_len, "in  ping:");
-                        printh(packet_buffer_out, packet_len, "out pong:");
+                //        printh(packet_buffer, packet_len, "in  ping:");
+                //        printh(packet_buffer_out, packet_len, "out pong:");
                         
                         uint8_t header[6];
-                        header[0] = (packet_len >> 24U) & 0xFFU;
-                        header[1] = (packet_len >> 16U) & 0xFFU;
-                        header[2] = (packet_len >>  8U) & 0xFFU;
-                        header[3] = (packet_len >>  0U) & 0xFFU;
-                        header[4] = (packet_type >> 8U) & 0xFFU;
-                        header[5] = (packet_type >> 0U) & 0xFFU;
+                        header[0] = (uint8_t)((packet_len >> 24U) & 0xFFU);
+                        header[1] = (uint8_t)((packet_len >> 16U) & 0xFFU);
+                        header[2] = (uint8_t)((packet_len >>  8U) & 0xFFU);
+                        header[3] = (uint8_t)((packet_len >>  0U) & 0xFFU);
+                        header[4] = (uint8_t)((packet_type >> 8U) & 0xFFU);
+                        header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
 
                         SSL_ENQUEUE(header, 6);
                         SSL_ENQUEUE(packet_buffer_out, packet_len);
-                        SSL_FLUSH_OUT();
 
-                        printl("\n\n\nsent PONG\n\n\n");
+                        if (DEBUG)
+                            printl("\n\n\nsent PONG\n\n\n");
 
                     }
 
-                    
+                    if (DEBUG)
+                    switch(packet_type)
+                    {
+                        case mtMANIFESTS:
+                        {
+                            protocol::TMManifests manifests;
+                            break;
+                        }
+
+                        case mtPING:
+                        {
+                            protocol::TMPing ping;
+                            break;
+                        }
+
+                        case mtCLUSTER:
+                        {
+                            protocol::TMCluster cluster;
+                            break;
+                        }
+
+                        case mtENDPOINTS:
+                        {
+                            protocol::TMEndpoints endpoints;
+                            break;
+                        }
+
+                        case mtTRANSACTION:
+                        {
+                            protocol::TMTransaction transaction;
+                            break;
+                        }
+
+                        case mtGET_LEDGER:
+                        {
+                            protocol::TMGetLedger getledger;
+                            break;
+                        }
+
+                        case mtLEDGER_DATA:
+                        {
+                            protocol::TMLedgerData ledgerdata;
+                            break;
+                        }
+
+                        case mtPROPOSE_LEDGER:
+                        {
+                            protocol::TMProposeSet proposal;
+                            break;
+                        }
+
+                        case mtSTATUS_CHANGE:
+                        {
+                            protocol::TMStatusChange statuschange;
+                            break;
+                        }
+
+                        case mtHAVE_SET:
+                        {
+                            protocol::TMHaveTransactionSet haveset;
+                            break;
+                        }
+
+                        case mtVALIDATION:
+                        {
+                            protocol::TMValidation validation;
+
+                            break;
+                        }
+
+                        case mtGET_OBJECTS:
+                        {
+                            protocol::TMGetObjectByHash getobjects;
+                            break;
+                        }
+
+                        case mtGET_SHARD_INFO:
+                        {
+                            break;
+                        }
+
+                        case mtSHARD_INFO:
+                        {
+                            protocol::TMPeerShardInfo shardinfo;
+                            break;
+                        }
+
+                        case mtGET_PEER_SHARD_INFO:
+                        {
+                            protocol::TMGetPeerShardInfo getshard; 
+                            break;
+                        }
+
+                        case mtPEER_SHARD_INFO:
+                        {
+                            break;
+                        }
+
+                        case mtVALIDATORLIST:
+                        {
+                            break;
+                        }
+
+                        case mtSQUELCH:
+                        {
+                            break;
+                        }
+
+                        case mtVALIDATORLISTCOLLECTION:
+                        {
+                            break;
+                        }
+
+                        case mtPROOF_PATH_REQ:
+                        {
+                            break;
+                        }
+
+                        case mtPROOF_PATH_RESPONSE:
+                        {
+                            break;
+                        }
+
+                        case mtREPLAY_DELTA_REQ:
+                        {
+                            break;
+                        }
+
+                        case mtREPLAY_DELTA_RESPONSE:
+                        {
+                            break;
+                        }
+
+                        case mtGET_PEER_SHARD_INFO_V2:
+                        {
+                            break;
+                        }
+
+                        case mtPEER_SHARD_INFO_V2:
+                        {
+                            break;
+                        }
+
+                        case mtHAVE_TRANSACTIONS:
+                        {
+                            break;
+                        }
+
+                        case mtTRANSACTIONS:
+                        {
+                            
+                            break;
+                        }                
+                    }
+
                     Hash packet_hash = hash(packet_type, packet_buffer, packet_len);
 
                     // check dd rules
@@ -990,7 +1152,8 @@ int peer_mode(
 
                         if (drop)
                         {
-                            printl("dropping incoming packet %d due to ddmode\n", packet_type);
+                            if (DEBUG)
+                                printl("dropping incoming packet %d due to ddmode\n", packet_type);
                             break;
                         }
 
@@ -1000,8 +1163,6 @@ int peer_mode(
                             random_eviction(seen_p2s, rnd_fd, EVICTION_SPINS);
                         }
                     }
-
-
 
                     // construct and forward to main-mode
                     {
@@ -1015,7 +1176,7 @@ int peer_mode(
                             .type = (uint16_t)(packet_type),
                             .source_port = (uint16_t)(port),
                             .source_addr = {
-                               0, 0, 0, 0, 0, 0, 0, 0,0, 0,
+                               0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                0xFFU, 0xFFU,
                                ip_int[0], ip_int[1], ip_int[2], ip_int[3]
                             },
@@ -1031,7 +1192,8 @@ int peer_mode(
                         };
 
                         ssize_t bytes_written = writev(main_fd, iov, 2);
-                        printl("packet written to main: %ld bytes written to socket\n", bytes_written);
+                        if (DEBUG)
+                            printl("packet written to main: %ld bytes written to socket\n", bytes_written);
 
                     }
                 } while (0);
@@ -1043,7 +1205,6 @@ int peer_mode(
                 packet_received = 0;
             }
         } while (0);
-        
 
 
             // task 2: continue looping until full packet received in buffer

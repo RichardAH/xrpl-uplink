@@ -213,6 +213,37 @@ enum ercode : int
 
 };
 
+enum mt : int16_t
+{
+	mtMANIFESTS = 2,
+	mtPING =  3,
+	mtCLUSTER =  5,
+	mtENDPOINTS =  15,
+	mtTRANSACTION =  30,
+	mtGET_LEDGER =  31,
+	mtLEDGER_DATA =  32,
+	mtPROPOSE_LEDGER =  33,
+	mtSTATUS_CHANGE =  34,
+	mtHAVE_SET =  35,
+	mtVALIDATION =  41,
+	mtGET_OBJECTS =  42,
+	mtGET_SHARD_INFO =  50,
+	mtSHARD_INFO =  51,
+	mtGET_PEER_SHARD_INFO =  52,
+	mtPEER_SHARD_INFO =  53,
+	mtVALIDATORLIST =  54,
+	mtSQUELCH =  55,
+	mtVALIDATORLISTCOLLECTION =  56,
+	mtPROOF_PATH_REQ =  57,
+	mtPROOF_PATH_RESPONSE =  58,
+	mtREPLAY_DELTA_REQ =  59,
+	mtREPLAY_DELTA_RESPONSE =  60,
+	mtGET_PEER_SHARD_INFO_V2 =  61,
+	mtPEER_SHARD_INFO_V2 =  62,
+	mtHAVE_TRANSACTIONS =  63,
+    mtTRANSACTIONS =  64 
+};
+
 int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, int iterations);
 
 int fd_set_flags(int fd, int new_flags);
@@ -220,12 +251,12 @@ int create_unix_accept(char* path);
 uint8_t packet_id(char* packet_name);
 
 int peer_mode(
-    char* ip, int port, char* main_path, uint8_t* key, 
-    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
+        char* ip, int port, char* main_path, uint8_t* key, 
+        ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 int main_mode(
-    char* ip, int port, int peer_max,
-    char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
-    ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
+        char* ip, int port, int peer_max,
+        char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
+        ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 Hash hash(int bias, const void* mem, int len);
