@@ -7,12 +7,12 @@ Hash hash(int packet_type, const void* mem, int len)
     uint8_t* ptr = (uint8_t*)mem;
     int i = 0, j = 0;
     if (len >= 8)
-    for (; i < len ; i += 8, ++j)
-    {
-        state = _mm_crc32_u64(state, *(reinterpret_cast<uint64_t*>(ptr + i)));
-        h.d[j % 8] ^= state;
-        h.q[j % 4] ^= *(reinterpret_cast<uint64_t*>(ptr + i));
-    }
+        for (; i < len ; i += 8, ++j)
+        {
+            state = _mm_crc32_u64(state, *(reinterpret_cast<uint64_t*>(ptr + i)));
+            h.d[j % 8] ^= state;
+            h.q[j % 4] ^= *(reinterpret_cast<uint64_t*>(ptr + i));
+        }
 
     if (len == i)
         return h;
@@ -205,9 +205,9 @@ int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, i
     {
         if (rnd - last == 0)
             continue;
-        
+
         std::advance(iter, rnd - last);
-            
+
         if (iter == map.end())
             break;
         if (iter->second + EVICTION_TIME < ct)
@@ -222,4 +222,279 @@ int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, i
         map.erase(i);
 
     return EC_SUCCESS;
+}
+
+
+int generate_node_keys(
+        secp256k1_context* ctx,
+        uint8_t* keyin,
+        uint8_t* outpubraw64,
+        uint8_t* outpubcompressed33,
+        char* outnodekeyb58,
+        size_t* outnodekeyb58size)
+{
+    secp256k1_pubkey* pubkey = (secp256k1_pubkey*)((void*)(outpubraw64));
+
+    if (!secp256k1_ec_pubkey_create(ctx, pubkey, (const unsigned char*)keyin)) {
+        printl("Could not generate secp256k1 keypair\n");
+        exit(EC_SECP256K1);
+    }
+
+    size_t out_size = 33;
+    secp256k1_ec_pubkey_serialize(ctx, outpubcompressed33, &out_size, pubkey, SECP256K1_EC_COMPRESSED);
+
+    unsigned char outpubcompressed38[38];
+
+    // copy into the 38 byte check version
+    for(int i = 0; i < 33; ++i) outpubcompressed38[i+1] = outpubcompressed33[i];
+
+    // pub key must start with magic type 0x1C
+    outpubcompressed38[0] = 0x1C;
+    // generate the double sha256
+    unsigned char hash[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(hash, outpubcompressed38, 34);
+
+    unsigned char hash2[crypto_hash_sha256_BYTES];
+    crypto_hash_sha256(hash2, hash, crypto_hash_sha256_BYTES);
+
+    // copy checksum bytes to the end of the compressed key
+    for (int i = 0; i < 4; ++i)
+        outpubcompressed38[34+i] = hash2[i];
+
+    // generate base58 encoding
+    b58enc(outnodekeyb58, outnodekeyb58size, outpubcompressed38, 38);
+    outnodekeyb58[*outnodekeyb58size] = '\0';
+
+    return EC_SUCCESS;
+}
+
+//todo: clean up and optimise, check for overrun 
+int ssl_handshake_and_upgrade(
+        int fd,
+        SSL** ssl,
+        SSL_CTX** ctx,
+        uint8_t* seckey_in,
+        uint8_t* our_pubkey_out,
+        uint8_t* peer_pubkey_out)
+{
+
+    // create secp256k1 context
+    secp256k1_context* secp256k1ctx = secp256k1_context_create(
+            SECP256K1_CONTEXT_VERIFY |
+            SECP256K1_CONTEXT_SIGN) ;
+
+    const SSL_METHOD *method = TLS_client_method(); 
+
+    *ctx = SSL_CTX_new(method);
+    SSL_CTX_set_ecdh_auto(*ctx, 1);
+    SSL_CTX_set_verify(*ctx, SSL_VERIFY_NONE, NULL);
+
+
+    *ssl = SSL_new(*ctx);
+    SSL_set_fd(*ssl, fd); 
+
+    int status = -100;
+    status = SSL_connect(*ssl);
+
+    if (status != 1)
+    {
+        status = SSL_get_error(*ssl, status);
+        printl("SSL_connect failed with error: %d\n", status);
+        return EC_SSL;
+    }    
+
+    unsigned char buffer[1024];
+    size_t len = SSL_get_finished(*ssl, buffer, 1024);
+    if (len < 12)
+    {
+        printl("Could not SSL_get_finished\n");
+        return EC_SSL;
+    }
+
+    // SHA512 SSL_get_finished to create cookie 1
+    unsigned char cookie1[64];
+    crypto_hash_sha512(cookie1, buffer, len);
+
+    len = SSL_get_peer_finished(*ssl, buffer, 1024);
+    if (len < 12)
+    {
+        printl("Could not SSL_get_peer_finished\n");
+        return EC_SSL;
+    }   
+
+    // SHA512 SSL_get_peer_finished to create cookie 2
+    unsigned char cookie2[64];
+    crypto_hash_sha512(cookie2, buffer, len);
+
+    // xor cookie2 onto cookie1
+    for (int i = 0; i < 64; ++i)
+        cookie1[i] ^= cookie2[i];
+
+    // the first half of cookie2 is the true cookie
+    crypto_hash_sha512(cookie2, cookie1, 64);
+
+    // generate keys
+    unsigned char pub[64], pubc[33];
+    char b58[100];
+    size_t b58size = 100;
+    int rc = generate_node_keys(secp256k1ctx, seckey_in, pub, pubc, b58, &b58size);
+
+    if (rc != EC_SUCCESS)
+        return rc;
+
+    for (int i = 0; i < 32; ++i)
+        our_pubkey_out[i] = pubc[1+i];
+
+    secp256k1_ecdsa_signature sig;
+    secp256k1_ecdsa_sign(secp256k1ctx, &sig, cookie2, seckey_in, NULL, NULL);
+
+    unsigned char buf[200];
+    size_t buflen = 200;
+    secp256k1_ecdsa_signature_serialize_der(secp256k1ctx, buf, &buflen, &sig);
+
+    char buf2[200];
+    size_t buflen2 = 200;
+    sodium_bin2base64(buf2, buflen2, buf, buflen, sodium_base64_VARIANT_ORIGINAL);
+    buf2[buflen2] = '\0';
+
+
+    char buf3[2048];
+    size_t buf3len = 0;
+    buf3len = snprintf(buf3, 2047, 
+            "GET / HTTP/1.1\r\n"
+            "User-Agent: rippled-1.8.0\r\n"
+            "Upgrade: XRPL/2.0\r\n"
+            "Connection: Upgrade\r\n"
+            "Connect-As: Peer\r\n"
+            "Crawl: private\r\n"
+            "Session-Signature: %s\r\n"
+            "Public-Key: %s\r\n\r\n", buf2, b58);
+
+
+    if (SSL_write(*ssl, buf3, buf3len) <= 0)
+    {
+        printl("Failed to write bytes to openssl fd during handshake\n");
+        return EC_SSL;
+    }
+
+    for (int i = 0; i < sizeof(buf3); ++i)
+        buf3[i] = 0;
+
+    // wait for reply
+    size_t bytes_read = SSL_read(*ssl, buf3, sizeof(buf3));
+    if (bytes_read <= 0)
+    {
+        printl("Failed to read reply during handshake\n");
+        return EC_SSL;
+    }
+
+    printl("handshake reply: `%s`\n", buf3);
+
+    // find their key
+    int found_key = 0;
+    for (int j = 0; j < bytes_read - 12; ++j)
+    {
+        if (memcmp(buf3 + j, "Public-Key: ", 12) == 0)
+        {
+            j += 12;
+
+            // scan forward to \r\n and replace with a \0
+            int k = j;
+            for (; k < bytes_read - 3; ++k)
+            {
+                if (buf3[k] == 0xD)
+                {
+                    buf3[k] = '\0';
+                    break;
+                }
+            }
+
+            if (buf3[k] != '\0')
+            {
+                printl("peer sent Public-Key: but we could not find end of line\n");
+                return EC_PROTO;
+            }
+
+            const char* pubkey = reinterpret_cast<const char*>(buf3 + j);
+            printl("peer key is: %s\n", pubkey);
+
+
+            uint8_t buf[38];
+            size_t bytes_written = sizeof(buf);
+
+            bool b58rc = b58tobin(buf, &bytes_written, pubkey, strlen(pubkey));
+            if (!(b58rc && bytes_written >= 33))
+            {
+                printl("could not decode peer key `%s`\n", pubkey);
+                return EC_PROTO;
+            }
+
+            for (int z = 2; z < 34; ++z)
+                peer_pubkey_out[z - 2] = buf[z];
+            printl("peer key raw: " FORMAT32 "\n", COPY32(peer_pubkey_out));
+            found_key = 1;
+            break;
+        }
+    }
+
+    if (!found_key)
+    {
+        printl("peer did not send a public key during connection upgrade\n");
+        return EC_PROTO;
+    }
+
+    secp256k1_context_destroy(secp256k1ctx);
+
+    return EC_SUCCESS;
+}
+
+
+// resize a malloced buffer between large and small sizes depending on what the current requirement is
+int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t small, size_t large)
+{
+    // upgrade to a larger buffer if needed
+    if (needed > *current)
+    {
+        if (needed <= large)
+        {
+            free(*buffer);
+            *current = large;
+            *buffer = (uint8_t*)malloc(*current);
+            if (!*buffer)
+            {
+                printl("malloc failed while upsizing buffer\n");
+                return EC_BUFFER;
+            }
+        }
+        else
+        {
+            printl("required buffer exceeds maximum size. "
+                    "buffer_size=%ld packet_size=%ld\n", *current, needed);
+            return EC_BUFFER;
+        }
+    }
+    else if (needed <= small && *current > small)
+    {
+        // downgrade to the smaller buffer
+        free(*buffer);
+        *current = small;
+        *buffer = (uint8_t*)malloc(*current);
+        if (!*buffer)
+        {
+            printl("malloc failed while downsizing buffer\n");
+            return EC_BUFFER;
+        }
+    }
+
+    return EC_SUCCESS;
+}
+
+void write_header(uint8_t* header, int packet_type, int packet_len)
+{
+    header[0] = (uint8_t)((packet_len >> 24U) & 0xFFU);
+    header[1] = (uint8_t)((packet_len >> 16U) & 0xFFU);
+    header[2] = (uint8_t)((packet_len >>  8U) & 0xFFU);
+    header[3] = (uint8_t)((packet_len >>  0U) & 0xFFU);
+    header[4] = (uint8_t)((packet_type >> 8U) & 0xFFU);
+    header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
 }

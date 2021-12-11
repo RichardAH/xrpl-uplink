@@ -8,6 +8,7 @@
 #define USER_AGENT          "xrpl-uplink"
 #define MAX_FDS 1024
 #define POLL_TIMEOUT 2000 /* ms */
+#define MAX_TIMEOUTS 20 // number of times poll can timeout before quit
 #define DEFAULT_BUF_SIZE 64
 #define DEBUG 1
 #define VERBOSE_DEBUG 1
@@ -48,6 +49,28 @@
 #include <time.h>
 #include <sys/uio.h>
 #include <iterator>
+#include <openssl/ssl.h>
+#include <openssl/sha.h>
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#include <openssl/pem.h>
+#include <sys/socket.h>
+#include <secp256k1.h>
+#include <netinet/tcp.h>
+
+
+#define ASSERT(s)\
+{\
+    int rc = (s);\
+    if (rc != EC_SUCCESS)\
+        exit(rc);\
+}
+
+#define die(e, s, ...)\
+{\
+    fprintf(stderr, "%lu [%s:%d\tpid=%d] " s "\n", time(NULL), __FILE__, __LINE__, my_pid, ##__VA_ARGS__);\
+    exit(e);\
+}
 
 
 #define printl(s, ...)\
@@ -56,7 +79,7 @@
 #define printh(ptr, ptrlen, s, ...)\
 {\
     char buf[256]; buf[0] = '\0';\
-    sprintf(buf, "%lu [%s:%d pid=%d] ", time(NULL), __FILE__, __LINE__, my_pid);\
+    sprintf(buf, "%lu [%s:%d\tpid=%d] ", time(NULL), __FILE__, __LINE__, my_pid);\
     fprintf(stderr, "%s" s "\n", buf, ##__VA_ARGS__);\
     for (char* x = buf; *x; ++x)\
         *x = ' ';\
@@ -64,7 +87,7 @@
     {\
         if (j % 16 == 0)\
             fprintf(stderr, "%s0x%08X:\t", buf, j);\
-        fprintf(stderr, "%02X%s", ptr[j],\
+        fprintf(stderr, "%02X%s", (uint8_t)(ptr[j]),\
             (j % 16 == 15 ? "\n" :\
             (j % 4 == 3 ? "  " :\
             (j % 2 == 1 ? " " : ""))));\
@@ -209,7 +232,9 @@ enum ercode : int
     EC_BUFFER      = 10,    // internal buffer was insufficiently large for an operation
     EC_ADDR        = 11,    // invalid address or hostname specified / could not resolve
     EC_PROTO       = 12,    // something illegal according to xrpl protocol rules happened
-    EC_RNG         = 13     // could not open or generate rng
+    EC_RNG         = 13,    // could not open or generate rng
+    EC_LOST        = 14,    // someone disconnected (peer or main), cannot continue
+    EC_TIMEOUT     = 15
 
 };
 
@@ -260,3 +285,24 @@ int main_mode(
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 Hash hash(int bias, const void* mem, int len);
+
+int generate_node_keys(
+    secp256k1_context* ctx,
+    uint8_t* keyin,
+    uint8_t* outpubraw64,
+    uint8_t* outpubcompressed33,
+    char* outnodekeyb58,
+    size_t* outnodekeyb58size);
+
+
+int ssl_handshake_and_upgrade(
+        int fd,
+        SSL** ssl,
+        SSL_CTX** ctx,
+        uint8_t* seckey_in,
+        uint8_t* our_pubkey_out,
+        uint8_t* peer_pubkey_out);
+
+int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t large, size_t small);
+
+void write_header(uint8_t* header, int packet_type, int packet_len);
