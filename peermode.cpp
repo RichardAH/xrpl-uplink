@@ -203,7 +203,8 @@ int peer_mode(
 
                 if (header_in_upto < 6)
                 {
-                    printl("reading packet header, upto: %ld\n", header_in_upto);
+                    if (DEBUG)
+                        printl("reading packet header, upto: %ld\n", header_in_upto);
                     break;
                 }
 
@@ -214,7 +215,8 @@ int peer_mode(
 
                 if (compressed && header_in_upto < 10)
                 {
-                    printl("reading extended packet header, upto: %ld\n", header_in_upto);
+                    if (DEBUG)
+                        printl("reading extended packet header, upto: %ld\n", header_in_upto);
                     break;
                 }
 
@@ -253,8 +255,9 @@ int peer_mode(
                 else
                     header_in_upto = 0;
 
-                printl("packet header[%ld]: type=%d size=%ld\n", header_size,
-                        packet_in_type, packet_in_expected_size);
+                if (DEBUG)
+                    printl("packet header[%d]: type=%d size=%d\n", 
+                        header_size, packet_in_type, packet_in_expected_size);
                 
                 // resize packet buffer if needed
                 ASSERT(resize_buffer(&packet_in_buffer,
@@ -264,7 +267,7 @@ int peer_mode(
                 SSL_read_ex(ssl, 0, 0, &dummy);
                 pending = SSL_pending(ssl);
 
-                printl("after header pending=%ld\n", pending);
+                //printl("after header pending=%ld\n", pending);
                 // fall through if there are more bytes
             }
 
@@ -281,14 +284,18 @@ int peer_mode(
                     size_t bytes_read = 
                         SSL_read(ssl, packet_in_buffer + packet_in_received_size, to_read);
                     packet_in_received_size += bytes_read;
-                    printl("packet %d - bytes read: %ld\n", packet_in_type, packet_in_received_size);
+                    if (DEBUG)
+                        printl("packet %d - bytes read: %d\n", packet_in_type, packet_in_received_size);
                 }
             }
 
             if (packet_in_received_size == packet_in_expected_size)
             {
+
                 // full packet received
-                printl("packet %d received (%d bytes)\n", packet_in_type, packet_in_expected_size);
+                if (DEBUG)
+                    printl("packet %d received (%d bytes)\n", packet_in_type, packet_in_expected_size);
+
                 if (packet_in_type == mtPING)
                 {
                     // send back a pong
@@ -303,12 +310,83 @@ int peer_mode(
                     write_header(pong_buf, mtPING, pong_size);
                     if (!ping.SerializeToArray(pong_buf + 6, pong_size))
                         die(EC_GENERIC, "could not serialize pong");
-                    
+
                     SSL_write(ssl, pong_buf, pong_size + 6);
 
-                    printh(pong_buf, pong_size + 6, "wrote pong:");
+                    if (DEBUG)
+                        printh(pong_buf, pong_size + 6, "wrote pong:");
                 }
 
+                
+                Hash packet_in_hash = hash(packet_in_type, packet_in_buffer, packet_in_expected_size);
+
+                // check dd rules
+                bool drop = false;
+                {
+                    ddmode d = dd_default;
+                    if (d == DD_NOT_SET)
+                        d = DD_ALL;
+
+                    // for mtPING the default is to drop (since we already processed a pong above)
+                    if (packet_in_type == 3)
+                        d = DD_DROP;
+
+                    // however if the user specifically set mtPING: then we will forward
+                    if (dd_specific.find(packet_in_type) != dd_specific.end())
+                        d = dd_specific[packet_in_type];
+
+                         drop  =    d == DD_BLACKHOLE   || d == DD_DROP     || d == DD_DROP_N;
+                    bool dedup =    d == DD_ALL         || d == DD_PEER     || d == DD_SQUELCH;
+
+                    if (dedup && 
+                            (seen_p2s.find(packet_in_hash) != seen_p2s.end() ||
+                             d == DD_ALL &&
+                                seen_s2p.find(packet_in_hash) != seen_s2p.end()))
+                        drop = true;
+
+                    if (drop && DEBUG)
+                            printl("dropping incoming packet %d due to ddmode\n", packet_in_type);
+                    else if (dedup)
+                    {
+                        seen_p2s.emplace(packet_in_hash, time(NULL));
+                        random_eviction(seen_p2s, rnd_fd, EVICTION_SPINS);
+                    }
+                }
+
+                // construct and forward to main-mode
+                if (!drop)
+                {
+                    uint32_t send_len = packet_in_expected_size + sizeof(Message);
+                
+                    MessagePacket m = 
+                    {
+                        .flags = 0,
+                        .size = packet_in_expected_size,
+                        .timestamp = (uint32_t)(time(NULL)),
+                        .type = (uint16_t)(packet_in_type),
+                        .source_port = (uint16_t)(port),
+                        .source_addr = {
+                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                           0xFFU, 0xFFU,
+                           ip_int[0], ip_int[1], ip_int[2], ip_int[3]
+                        },
+                        .hash = { COPY32(packet_in_hash.b) },
+                        .source_peer = { COPY32(peer_pubkey) },
+                        .destination_peer = { COPY32(our_pubkey) }
+                    };
+
+                    struct iovec iov[] = 
+                    {
+                        { .iov_base = &m,                   .iov_len = sizeof(MessagePacket)     },
+                        { .iov_base = packet_in_buffer,     .iov_len = packet_in_expected_size   }
+                    };
+
+                    ssize_t bytes_written = writev(main_fd, iov, 2);
+                    if (DEBUG)
+                        printl("packet written to main: %ld bytes written to socket\n", bytes_written);
+
+                }
+            
                 packet_in_type = -1;
                 packet_in_expected_size = 0;
                 packet_in_received_size = 0;

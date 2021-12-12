@@ -10,8 +10,8 @@
 #define POLL_TIMEOUT 2000 /* ms */
 #define MAX_TIMEOUTS 20 // number of times poll can timeout before quit
 #define DEFAULT_BUF_SIZE 64
-#define DEBUG 1
-#define VERBOSE_DEBUG 1
+#define DEBUG 0
+#define VERBOSE_DEBUG 0
 #define HTTP_BUFFER_SIZE 4096
 #define SSL_BUFFER_SIZE 65536
 #define PACKET_BUFFER_NORM 65536
@@ -57,6 +57,7 @@
 #include <sys/socket.h>
 #include <secp256k1.h>
 #include <netinet/tcp.h>
+#include <utility>
 
 
 #define ASSERT(s)\
@@ -306,3 +307,5 @@ int ssl_handshake_and_upgrade(
 int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t large, size_t small);
 
 void write_header(uint8_t* header, int packet_type, int packet_len);
+
+int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips);

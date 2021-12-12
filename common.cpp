@@ -215,7 +215,7 @@ int random_eviction(std::map<Hash, uint32_t, HashComparator>& map, int rnd_fd, i
         last = rnd;
     }    
 
-    if (to_evict.size() > 0)
+    if (to_evict.size() > 0 && DEBUG)
         printl("evicting %ld entries from map[%d]\n", to_evict.size(), size);
 
     for (auto const& i : to_evict)
@@ -497,4 +497,72 @@ void write_header(uint8_t* header, int packet_type, int packet_len)
     header[3] = (uint8_t)((packet_len >>  0U) & 0xFFU);
     header[4] = (uint8_t)((packet_type >> 8U) & 0xFFU);
     header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
+}
+
+
+
+int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips)
+{
+    protocol::TMEndpoints eps;
+    bool success = eps.ParseFromArray(packet_buffer, packet_len);
+    if (DEBUG)
+        printl("parsed endpoints: %s\n", (success ? "yes" : "no") );
+
+    int counter = 0;
+
+    if (DEBUG)
+        printl("mtEndpoints contains %d entries\n", eps.endpoints_v2_size());
+
+    for (int k = 0; k < eps.endpoints_v2_size(); ++k)
+    {
+        auto const& ep = eps.endpoints_v2(k);
+        std::string const& endpoint = ep.endpoint();
+        const char* str = endpoint.c_str();
+        size_t len = endpoint.size();
+        uint32_t hops = ep.hops();
+
+        if (hops == 0)
+            continue;
+
+        char ip[128];
+        uint32_t port;
+
+        ip[0] = '\0';
+        
+        // hacky, we should support ipv6 properly at some point
+        if (len > 5 && memcmp(str, "[::]:", 5) == 0)
+            continue;
+
+        if (len > 8 && memcmp(str, "[::ffff:", 8) == 0)
+            str += 8;
+
+        uint32_t ip_parts[4];
+        if (sscanf(str, "%u.%u.%u.%u", &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) != 4)
+        {
+            printl("bad endpoint %s, can't read ip\n", str);
+            continue;
+        }
+
+        size_t iplen = sprintf(ip, "%u.%u.%u.%u", ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]);
+
+        // search backward for last :
+        const char* ptr = str + len - 1;
+        while (ptr > str)
+        {
+            if (*ptr == ':')
+                break;
+            ptr--;
+        }
+
+        if (ptr == str || sscanf(ptr+1, "%u", &port) != 1)
+        {
+            printl("bad endpoint %s can't find port\n", str);
+            continue;
+        }
+
+        ips.emplace_back(ip, port);
+        counter++;
+    }
+
+    return counter;
 }
