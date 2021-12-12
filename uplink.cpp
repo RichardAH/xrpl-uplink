@@ -5,7 +5,7 @@
 int print_usage(int argc, char** argv, const char* error)
 {
     fprintf(stderr,
-    "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s%s%s"
+    "XRPL-Uplink v%s by Richard Holland / XRPL-Labs\n%s%s%s"
     "An XRPL peer-protocol endpoint for connecting local subscribers (applications) to the XRPL mesh network.\n"
     "Main-mode:\n"
     "\tThe process that subscribers connect to. Maintains a swarm of peer mode processes up to max-peers\n"
@@ -46,9 +46,8 @@ int print_usage(int argc, char** argv, const char* error)
     "       %s 10 r.ripple.com 51235 all mtGET_LEDGER:none\n",
     VERSION, 
     (error ? "\n" : ""), 
-    (error ? "\u001b[31mError: " : ""),
     (error ? error : ""), 
-    (error ? "\u001b[30m\n\n" : ""), 
+    (error ? "\n" : ""), 
     argv[0],
     (int)(strlen(argv[0])), SPACES,
     (int)(strlen(argv[0])), SPACES, argv[0],
@@ -78,42 +77,52 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
-    uint32_t ip[4];
-    char host[256]; host[sizeof(host) - 1] = '\0';
-    strncpy(host, argv[2], sizeof(host) - 1);
-
-    if (DEBUG)
-       printl("host prelookup: %s\n", host);
-
-    // check for valid ipv4 address and perform nslookup
-    if (sscanf(host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
-        ip[0] > 255 || ip[1] > 255 || ip[2] > 255 || ip[3] > 255)
-    {
-        struct hostent* hn = gethostbyname(host);
-        if (!hn)
-        {
-            print_usage(argc, argv, "invalid IP/hostname (IPv4 ONLY)");
-            return EC_ADDR;
-        }
-       
-        struct in_addr** addr_list = (struct in_addr **)hn->h_addr_list;
-        char* new_host = inet_ntoa(*addr_list[0]);
-        if (sscanf(new_host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
-            ip[0] > 255 || ip[1] > 255 || ip[2] > 255 || ip[3] > 255)
-        {
-            print_usage(argc, argv, "invalid IP after resolving hostname (IPv4 ONLY)");
-            return EC_ADDR;
-        }
-
-        strncpy(host, new_host, sizeof(host) - 1);
-    }
-
     int port = 0;
+    char port_str[10];
     if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
     {
         print_usage(argc, argv, "port must be a number between 1 and 65535 inclusive");
         return EC_PARAMS;
     }
+    snprintf(port_str, sizeof(port_str), "%u", port);
+
+    char host[256]; host[sizeof(host) - 1] = '\0';
+    strncpy(host, argv[2], sizeof(host) - 1);
+
+    struct hostent* hn = gethostbyname(host);
+    if (hn)
+    {
+        struct in_addr** addr_list = (struct in_addr **)hn->h_addr_list;
+        char* new_host = inet_ntoa(*addr_list[0]);
+        host[0] = 0;
+        strncpy(host, new_host, sizeof(host));
+    }
+
+    {
+        // try parse as an ip endpoint
+        char tmp[256];
+        
+        std::optional<std::string> ipv4 = try_down_convert_to_ipv4(host);
+        if (ipv4)
+            strncpy(tmp, ipv4->c_str(), sizeof(tmp) - 1);
+        else
+            strncpy(tmp, host, sizeof(tmp) - 1);
+
+        strncat(tmp, ":", sizeof(tmp) - 1);
+        strncat(tmp, port_str, sizeof(tmp) - 1);
+        auto p = parse_endpoint(tmp, strlen(tmp));
+        if (!p)
+        {
+            printl("invalid IP/hostname: %s\n", host);
+            return EC_ADDR;
+        }
+        strncpy(host, (ipv4 ? ipv4->c_str() : p->first.c_str()), sizeof(host));
+    }
+
+
+    if (DEBUG)
+       printl("host prelookup: %s\n", host);
+
 
     ddmode dd_default = DD_NOT_SET;
     if (argc >= 5)
@@ -380,6 +389,11 @@ int main(int argc, char** argv)
         {
             char port_str[10];
             snprintf(port_str, 10, "%d", port);
+
+            std::optional<std::string> ipv4 = try_down_convert_to_ipv4(host);
+            if (ipv4)
+                strncpy(host, ipv4->c_str(), sizeof(host)-1);
+
             printl("spawning new peermode process %s:%s\n", host, port_str);
 
             // all our FDs are close on exec

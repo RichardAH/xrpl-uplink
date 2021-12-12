@@ -20,27 +20,63 @@
 }
 
 
-int connect_peer(char* ip, int port, int* peer_fd)
+int connect_peer(const char* ip, int port, int* peer_fd)
 {
-    if ((*peer_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
-    {
-        printl("Could not create TCP socket for peer %s:%d\n", ip, port);
-        return EC_TCP;
-    }
 
-    fd_set_flags(*peer_fd, O_CLOEXEC);
+    std::optional<std::string> ipv4 = try_down_convert_to_ipv4(ip);
+    if (ipv4)
+        ip = ipv4->c_str();
 
     struct sockaddr_in peer_addr;
     memset(&peer_addr, '0', sizeof(peer_addr));
-
     peer_addr.sin_family = AF_INET;
     peer_addr.sin_port = htons(port);
 
-    if (inet_pton(AF_INET, ip, &peer_addr.sin_addr) <= 0)
+    if (inet_pton(AF_INET, ip, &peer_addr.sin_addr) > 0)
     {
-        printl("Could not parse ip %s while trying to connect to peer\n", ip);
-        return EC_TCP;
+        if (DEBUG)
+        {
+            char str[256]; str[0] = 0;
+            inet_ntop(AF_INET, &(peer_addr.sin_addr), str, sizeof(str));
+            printl("parsed ipv4: `%s`\n", str);
+        }
+
+        if ((*peer_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+        {
+            printl("Could not create TCP socket for peer %s:%d\n", ip, port);
+            return EC_TCP;
+        }
     }
+    else
+    {
+    
+        // try ipv6
+        struct sockaddr_in6 peer_addr;
+        memset(&peer_addr, '0', sizeof(peer_addr));
+        peer_addr.sin6_family = AF_INET6;
+        peer_addr.sin6_port = htons(port);
+        if (inet_pton(AF_INET6, ip, &peer_addr.sin6_addr) <= 0)
+        {
+            printf("Could not parse ip\n");
+            return EC_TCP;
+        }
+
+        if (DEBUG)
+        {
+            char str[256]; str[0] = 0;
+            inet_ntop(AF_INET6, &(peer_addr.sin6_addr), str, sizeof(str));
+            printl("parsed ipv6: `%s`\n", str);
+        }
+        
+        if ((*peer_fd = socket(AF_INET6, SOCK_STREAM, 0)) < 0)
+        {
+            printl("Could not create TCP socket for peer %s:%d\n", ip, port);
+            return EC_TCP;
+        }
+    }
+
+
+    fd_set_flags(*peer_fd, O_CLOEXEC);
 
     int synRetries = 1; 
     setsockopt(*peer_fd, IPPROTO_TCP, TCP_SYNCNT, &synRetries, sizeof(synRetries));
@@ -96,9 +132,15 @@ int peer_mode(
     my_pid = getpid();    
 
     // we will decompose the passed IP for use later in packet headers
-    uint8_t ip_int[4];
-    if (sscanf(ip, "%hhu.%hhu.%hhu.%hhu", ip_int, ip_int+1, ip_int+2, ip_int+3) != 4)
-        die(EC_ADDR, "failed to parse ipv4: `%s` into integer format\n", ip);
+    uint8_t ip_int[16];
+    {
+        int rc = ip_to_int(ip, ip_int);
+        if (rc == EC_ADDR)
+            return EC_ADDR;
+        
+        if (DEBUG)
+            printh(ip_int, 16, "parsed ip on peermode start:");
+    }
 
     // connect to peer (TCP/IP)
     int peer_fd = -1;  ASSERT(connect_peer(ip, *port, &peer_fd));
@@ -117,7 +159,13 @@ int peer_mode(
         uint8_t r;
         read(rnd_fd, &r, 1);
         auto& peer = peerips[r % peerips.size()];
-        strcpy(ip, peer.first.c_str());
+
+        std::optional<std::string> ipv4 = try_down_convert_to_ipv4(peer.first.c_str());
+        if (ipv4)
+            strncpy(ip, ipv4->c_str(), 256);
+        else
+            strncpy(ip, peer.first.c_str(), 256);
+
         *port = peer.second;
         return EC_BUSY;
     }
@@ -140,11 +188,7 @@ int peer_mode(
             .timestamp = (uint32_t)(time(NULL)),
             .type = 0,
             .remote_port = (uint16_t)(*port),
-            .remote_addr = {
-               0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-               0xFFU, 0xFFU,
-               ip_int[0], ip_int[1], ip_int[2], ip_int[3]
-            },
+            .remote_addr = { COPY16(ip_int) },
             .reserved2 = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 },
             .remote_peer = { COPY32(peer_pubkey) },
             .local_peer = { COPY32(our_pubkey) }
@@ -398,7 +442,8 @@ int peer_mode(
                 if (!drop)
                 {
                     uint32_t send_len = packet_in_expected_size + sizeof(Message);
-                
+        
+                            
                     MessagePacket m = 
                     {
                         .flags = 0,
@@ -406,11 +451,7 @@ int peer_mode(
                         .timestamp = (uint32_t)(time(NULL)),
                         .type = (uint16_t)(packet_in_type),
                         .source_port = (uint16_t)(*port),
-                        .source_addr = {
-                           0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                           0xFFU, 0xFFU,
-                           ip_int[0], ip_int[1], ip_int[2], ip_int[3]
-                        },
+                        .source_addr = { COPY16(ip_int) },
                         .hash = { COPY32(packet_in_hash.b) },
                         .source_peer = { COPY32(peer_pubkey) },
                         .destination_peer = { COPY32(our_pubkey) }

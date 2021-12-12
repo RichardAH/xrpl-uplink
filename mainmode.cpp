@@ -234,18 +234,21 @@ int main_mode(
 
 #define EXTRACT_SOURCE_IP(ip, m)\
 {\
-        ip[0] ='\0';\
-        char* x = ip;\
-        for (int j = 0; j < 16; ++j)\
-        {\
-            int hi = (m->packet.source_addr[j] >> 4U);\
-            int lo = (m->packet.source_addr[j] & 0xFU);\
-            *x++ = (hi > 9 ? (hi - 10) + 'A' : hi + '0');\
-            *x++ = (lo > 9 ? (lo - 10) + 'A' : lo + '0');\
-            if (j % 2 == 1)\
-                *x++ = ':';\
-        }\
-        *x = '\0';\
+    ip[0] ='\0';\
+    char* x = ip;\
+    for (int j = 0; j < 16; ++j)\
+    {\
+        int hi = (m->packet.source_addr[j] >> 4U);\
+        int lo = (m->packet.source_addr[j] & 0xFU);\
+        *x++ = (hi > 9 ? (hi - 10) + 'A' : hi + '0');\
+        *x++ = (lo > 9 ? (lo - 10) + 'A' : lo + '0');\
+        if (j % 2 == 1 && j != 15)\
+            *x++ = ':';\
+    }\
+    *x = '\0';\
+    std::optional<std::string> ipv4 = try_down_convert_to_ipv4(ip);\
+    if (ipv4)\
+        strncpy(ip, ipv4->c_str(), sizeof(ip) - 1);\
 }
 
                 if (is_subscriber)
@@ -278,17 +281,19 @@ int main_mode(
                         {
                             peers_rev[{ip_buf, m->packet.source_port}] = fdset[i].fd;
                             peers[fdset[i].fd] = {ip_buf, m->packet.source_port};
-                            printl("peer added: %s:%d\n", ip_buf, m->packet.source_port);
+                            printl("peer added: [%s]:%d\n", ip_buf, m->packet.source_port);
                         }
                     }
                     else if (mtype == 0)
                     {
 
-                        EXTRACT_SOURCE_IP(ip_buf, m);
-
                         if (DEBUG)
+                        {
+                            EXTRACT_SOURCE_IP(ip_buf, m);
+
                             printl("packet: %d size: %d ip: %s port: %d\n", 
                                 m->packet.type, m->packet.size, ip_buf, m->packet.source_port);
+                        }
 
                         uint32_t packet_expected = sizeof(MessagePacket) + m->packet.size;
 
@@ -362,20 +367,23 @@ int main_mode(
                                     packet_buffer + sizeof(Message), packet_expected - sizeof(Message), ips);
                             //printl("parse_endpoints = %d\n", c);
                             int counter = peer_max - peers.size();
-                            printl("trying to spawn %d peers\n", counter);
-                            for (auto& p : ips)
+                            if (counter > 0)
                             {
-                                if (counter-- <= 0)
-                                    break;
-                                // we're going to fork, then return in the fork to uplink.cpp
-                                // whilst asking it to turn us into a peer
-                                const char* peer_ip = p.first.c_str();
-                                int peer_port = p.second;
-                                if (fork() == 0)
+                                printl("trying to spawn %d peers\n", counter);
+                                for (auto& p : ips)
                                 {
-                                    strcpy(ip, peer_ip);
-                                    *port = peer_port;
-                                    return EC_BECOME_PEER;
+                                    if (counter-- <= 0)
+                                        break;
+                                    // we're going to fork, then return in the fork to uplink.cpp
+                                    // whilst asking it to turn us into a peer
+                                    const char* peer_ip = p.first.c_str();
+                                    int peer_port = p.second;
+                                    if (fork() == 0)
+                                    {
+                                        strcpy(ip, peer_ip);
+                                        *port = peer_port;
+                                        return EC_BECOME_PEER;
+                                    }
                                 }
                             }
                             //    printl("endpoint: %s : %d\n", p.first.c_str(), p.second);

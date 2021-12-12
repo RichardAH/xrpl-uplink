@@ -533,46 +533,6 @@ void write_header(uint8_t* header, int packet_type, int packet_len)
     header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
 }
 
-std::optional<std::pair<std::string, int>> parse_endpoint(const char* str, int len)
-{
-    if (DEBUG && VERBOSE_DEBUG)
-        printl("called parse_endpoint(%s, %d);\n", str, len);
-    char ip[128];
-    uint32_t port;
-
-    ip[0] = '\0';
-    
-    // hacky, we should support ipv6 properly at some point
-    if (len > 5 && memcmp(str, "[::]:", 5) == 0)
-        return std::nullopt;
-
-    if (len > 8 && memcmp(str, "[::ffff:", 8) == 0)
-        str += 8;
-
-    uint32_t ip_parts[4];
-    if (sscanf(str, "%u.%u.%u.%u", &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) != 4)
-    {
-        printl("bad endpoint %s, can't read ip\n", str);
-        return std::nullopt;
-    }
-
-    size_t iplen = sprintf(ip, "%u.%u.%u.%u", ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]);
-
-    // find :
-    const char* ptr;
-    for (ptr = str; *ptr != ':' && ptr < str + len; ++ptr);
-
-    if (*ptr == ':') ptr++;
-
-    if (ptr == str || sscanf(ptr, "%u", &port) != 1)
-    {
-        printl("bad endpoint `%s` can't find port ptr=`%s`\n", str, ptr);
-        return std::nullopt;
-    }
-
-    return {{ip, port}};
-}
-
 int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips)
 {
     protocol::TMEndpoints eps;
@@ -606,4 +566,210 @@ int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pai
     }
 
     return counter;
+}
+
+// parse any ip (4 or 6) into a 16 byte ipv6 address
+int ip_to_int(const char* ip_in, uint8_t* ip_out)
+{
+    uint8_t* ip_int = ip_out;
+    const char* ip = ip_in;
+
+    while (*ip == '[') ip++;
+
+    if (sscanf(ip, "%hhu.%hhu.%hhu.%hhu", ip_int+12, ip_int+13, ip_int+14, ip_int+15) == 4)
+    {
+        ip_int[10] = 0xFFU;
+        ip_int[11] = 0xFFU;
+        for (int i = 0; i < 10; ++i)
+            ip_int[i] = 0;
+    }
+    else
+    {
+
+        char tmp[256]; tmp[0] = 0; tmp[1] = 0;
+        strncpy(tmp, ip, sizeof(tmp));
+
+
+        // find compression ::, if any
+        char* compression = 0;
+        for (char* x = tmp; *(x+1) != 0; ++x)
+        if (*x == ':' && *(x+1) == ':')
+        {
+            *x = '\0';
+            compression = x + 2;
+            break;
+        }
+
+        uint16_t ip6_int[8];
+
+        if (DEBUG)
+            printl("compression? %s - `%s`\n", (compression ? "yes" : "no"), (compression ? compression : ""));
+        if (compression)
+        {
+            // compressed ipv6
+            
+            // first zero it out
+            for (int i = 0; i < 8; ++i)
+                ip6_int[i] = 0;
+
+            int total_filled = 0;
+        
+            if (strcmp(ip, "::") == 0)
+            {
+                // do nothing in this special edge case, since we're already at all 0's
+            }
+            else
+            {
+                int upto = 0;
+                char* pch = strtok(tmp, ":");
+                
+                while (pch != NULL)
+                {
+                    if (sscanf(pch, "%hx", &ip6_int[upto]) != 1)
+                    {
+                        printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                        return EC_ADDR;
+                    }
+
+                    total_filled++;
+                    upto++;
+                    if (upto >= 8)
+                    {
+                        printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                        return EC_ADDR;
+                    }
+
+                    pch = strtok(NULL, ":");
+                }
+
+                if (upto >= 8)
+                {
+                    printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                    return EC_ADDR;
+                }
+
+                upto = 0;
+
+                if (*compression != 0)
+                {
+                    uint16_t back6[16];
+                    pch = strtok(compression, ":");
+                    while (1)
+                    {
+                        if (sscanf(pch, "%hx", &back6[upto]) != 1)
+                        {
+                            printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                            return EC_ADDR;
+                        }
+
+                        total_filled++;
+                        upto++;
+                        
+                        if (pch == NULL)
+                            break;
+                        
+                        pch = strtok(NULL, ":");
+                        
+                        if (pch == NULL)
+                            break;
+                        
+                        if (upto >= 8)
+                        {
+                            printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                            return EC_ADDR;
+                        }
+                    }
+
+                    if (total_filled > 7)
+                    {
+                        printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
+                        return EC_ADDR;
+                    }
+
+                    for (int i = 0; i < upto; ++i)
+                        ip6_int[8 - upto + i] = back6[i];
+                }
+            }
+        }
+        else
+        {
+            // full uncompressed ipv6
+            if (sscanf(ip, "%hx:%hx:%hx:%hx:%hx:%hx:%hx:%hx", 
+                    ip6_int + 0, ip6_int + 1, ip6_int + 2, ip6_int + 3,
+                    ip6_int + 4, ip6_int + 5, ip6_int + 6, ip6_int + 7) != 8)
+            {
+                printl("failed to parse ipv6: `%s` into integer format (full uncompressed)\n", ip);
+                return EC_ADDR;
+            }
+        }
+
+        for (int i = 0; i < 8; ++i)
+        {
+            ip_int[i*2 + 0] = (uint8_t)(ip6_int[i] >> 8U);
+            ip_int[i*2 + 1] = (uint8_t)(ip6_int[i] & 0xFFU);
+        }
+    }
+    return EC_SUCCESS;
+}
+
+// if the ipv6 address in ip is actually an ipv4 address then return it in normal dot notation form
+std::optional<std::string> try_down_convert_to_ipv4(const char* ip)
+{
+    uint8_t ip_int[16];
+    if (ip_to_int(ip, ip_int) != EC_SUCCESS)
+    {
+        if (DEBUG)
+            printl("Could not parse IP: `%s`\n", ip);
+        return std::nullopt;
+    }
+
+    char ip_buf[64];
+
+    // procecess ipv4 in ipv6 addresses as ipv4
+    if (ip_int[0] == 0 && ip_int[1] == 0 && ip_int[2] == 0 && ip_int[3] == 0 &&
+        ip_int[4] == 0 && ip_int[5] == 0 && ip_int[6] == 0 && ip_int[7] == 0 &&
+        ip_int[8] == 0 && ip_int[9] == 0 && ip_int[10] == 0xFFU && ip_int[11] == 0xFFU)
+    {
+        snprintf(ip_buf, sizeof(ip_buf) - 1, "%u.%u.%u.%u", ip_int[12], ip_int[13], ip_int[14], ip_int[15]);
+        return {ip_buf};
+    }
+    return std::nullopt;
+}
+
+std::optional<std::pair<std::string, int>> parse_endpoint(const char* str, int len)
+{
+    char tmp[256];
+    strncpy(tmp, str, sizeof(tmp)-1);
+    tmp[255] = 0;
+
+    // find port
+    char* port = tmp + strlen(tmp) - 1;
+    while (port != tmp && *port != ':')
+        port--;
+    *port++ = 0;
+
+    // try parse port first
+    uint32_t port_int = 0;
+    if (sscanf(port, "%u", &port_int) != 1)
+    {
+        if (DEBUG)
+            printl("could not parse port when parsing endpoint: `%s`\n", str);
+        return std::nullopt;
+    }
+
+    // now try parse ip
+    uint8_t ip_int[16];
+    if (ip_to_int(tmp, ip_int) != EC_SUCCESS)
+    {
+        if (DEBUG)
+            printl("could not parse ip when parsing endpoint: `%s`\n", str);
+        return std::nullopt;
+    }
+
+    char ip[64];
+    snprintf(ip, sizeof(ip), "%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X",
+            COPY16(ip_int));
+
+    return {{ip, port_int}};
+
 }

@@ -101,6 +101,8 @@
 #define COPY32(x)  x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12],x[13],x[14],x[15],\
     x[16],x[17],x[18],x[19],x[20],x[21],x[22],x[23],x[24],x[25],x[26],x[27],x[28],x[29],x[30],x[31]
 
+#define COPY16(x) x[0],x[1],x[2],x[3],x[4],x[5],x[6],x[7],x[8],x[9],x[10],x[11],x[12],x[13],x[14],x[15]
+
 #define FORMAT32 "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "\
                  "%02X%02X%02X%02X %02X%02X%02X%02X  %02X%02X%02X%02X %02X%02X%02X%02X "
 
@@ -317,3 +319,7 @@ void write_header(uint8_t* header, int packet_type, int packet_len);
 int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips);
 
 std::optional<std::pair<std::string, int>> parse_endpoint(const char* endpoint, int len);
+
+int ip_to_int(const char* ip_in, uint8_t* ip_out);
+
+std::optional<std::string> try_down_convert_to_ipv4(const char* ip);
