@@ -28,6 +28,8 @@ int connect_peer(char* ip, int port, int* peer_fd)
         return EC_TCP;
     }
 
+    fd_set_flags(*peer_fd, O_CLOEXEC);
+
     struct sockaddr_in peer_addr;
     memset(&peer_addr, '0', sizeof(peer_addr));
 
@@ -39,6 +41,9 @@ int connect_peer(char* ip, int port, int* peer_fd)
         printl("Could not parse ip %s while trying to connect to peer\n", ip);
         return EC_TCP;
     }
+
+    int synRetries = 1; 
+    setsockopt(*peer_fd, IPPROTO_TCP, TCP_SYNCNT, &synRetries, sizeof(synRetries));
 
     if (connect(*peer_fd, (struct sockaddr *)&peer_addr, sizeof(peer_addr)) < 0)
     {
@@ -70,6 +75,8 @@ int connect_main(char* main_path, int* main_fd)
         return EC_UNIX;
     }
 
+    fd_set_flags(*main_fd, O_CLOEXEC);
+
     // connect
     if (connect(*main_fd, (const struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
@@ -82,7 +89,7 @@ int connect_main(char* main_path, int* main_fd)
 
 
 int peer_mode(
-    char* ip, int port, char* main_path, uint8_t* our_seckey,
+    char* ip, int* port, char* main_path, uint8_t* our_seckey,
     ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
 
@@ -94,21 +101,56 @@ int peer_mode(
         die(EC_ADDR, "failed to parse ipv4: `%s` into integer format\n", ip);
 
     // connect to peer (TCP/IP)
-    int peer_fd = -1;  ASSERT(connect_peer(ip, port, &peer_fd));
-
-    // connect to main (unix)
-    int main_fd = -1;  ASSERT(connect_main(main_path, &main_fd));
+    int peer_fd = -1;  ASSERT(connect_peer(ip, *port, &peer_fd));
 
     // setup SSL
     uint8_t our_pubkey[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
     uint8_t peer_pubkey[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
     SSL_CTX* sslctx = NULL;
     SSL* ssl = NULL;
-    ASSERT(ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey));
+    std::vector<std::pair<std::string, int>> peerips;
+
+    int rc = ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey, &peerips);
+    if (rc == EC_BUSY)
+    {
+        // cheap and dirty: just restart the process on a random IP
+        uint8_t r;
+        read(rnd_fd, &r, 1);
+        auto& peer = peerips[r % peerips.size()];
+        strcpy(ip, peer.first.c_str());
+        *port = peer.second;
+        return EC_BUSY;
+    }
+    else if (rc != EC_SUCCESS)
+        exit(rc);
+
+    // connect to main (unix)
+    int main_fd = -1;  ASSERT(connect_main(main_path, &main_fd));
 
     // sanity check
     if (main_fd < 0 || peer_fd < 0)
         die(EC_GENERIC, "main_fd or peer_fd invalid\n");
+    
+    // send peer status message to let main process know to whom we're connected
+    {
+        MessagePeerStatus m = 
+        {
+            .flags = 2U << 28U,
+            .reserved1 = 0,
+            .timestamp = (uint32_t)(time(NULL)),
+            .type = 0,
+            .remote_port = (uint16_t)(*port),
+            .remote_addr = {
+               0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+               0xFFU, 0xFFU,
+               ip_int[0], ip_int[1], ip_int[2], ip_int[3]
+            },
+            .reserved2 = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 },
+            .remote_peer = { COPY32(peer_pubkey) },
+            .local_peer = { COPY32(our_pubkey) }
+        };
+        send(main_fd, (void*)(&m), sizeof(Message), 0);
+    }
 
     // set up counters and variables 
     int packet_in_type = -1;               // type of the current packet we're receiving, -1 for not yet known
@@ -146,7 +188,6 @@ int peer_mode(
     if (DEBUG)
         printl("Starting poll loop for peer %s\n", ip);
     
-
     // primary poll loop
     int poll_result = -1;
     int timeout = 0; // counter for number of times the poll timesout, should not be large
@@ -171,7 +212,7 @@ int peer_mode(
             if (peer_dead || main_dead)
             {
                 if (peer_dead)
-                    printl("Peer connection lost %s:%d\n", ip, port);
+                    printl("Peer connection lost %s:%d\n", ip, *port);
                 if (main_dead)
                     printl("Main connection lost %s\n", main_path);
                 return EC_LOST;
@@ -364,7 +405,7 @@ int peer_mode(
                         .size = packet_in_expected_size,
                         .timestamp = (uint32_t)(time(NULL)),
                         .type = (uint16_t)(packet_in_type),
-                        .source_port = (uint16_t)(port),
+                        .source_port = (uint16_t)(*port),
                         .source_addr = {
                            0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                            0xFFU, 0xFFU,

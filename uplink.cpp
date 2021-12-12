@@ -82,7 +82,8 @@ int main(int argc, char** argv)
     char host[256]; host[sizeof(host) - 1] = '\0';
     strncpy(host, argv[2], sizeof(host) - 1);
 
-    printl("host prelookup: %s\n", host);
+    if (DEBUG)
+       printl("host prelookup: %s\n", host);
 
     // check for valid ipv4 address and perform nslookup
     if (sscanf(host, "%u.%u.%u.%u", ip, ip+1, ip+2, ip+3) != 4 || 
@@ -273,6 +274,7 @@ int main(int argc, char** argv)
         printl("can't open /dev/urandom");
         return EC_RNG;
     }
+    fd_set_flags(rnd_fd, O_CLOEXEC);
 
     // load the private key or create specified keyfile if it doesn't already exist
     uint8_t key[32];
@@ -317,11 +319,32 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        return peer_mode(host, port, peer_path, key, dd_default, dd_specific, rnd_fd);
+        int rc = peer_mode(host, &port, peer_path, key, dd_default, dd_specific, rnd_fd);
+        if (rc == EC_BUSY)
+        {
+            // the peer may be busy, however since we want the commandline of the process
+            // to always reflect the actual peer the process is connected to we will exec again
+            char port_str[10];
+            snprintf(port_str, 10, "%d", port);
+            printl("peer was busy, trying: %s : %s\n", host, port_str);
+
+            // all our FDs are close on exec
+            execlp(argv[0], argv[0], "connect", host, port_str, (char*)0);
+            printl("execlp failed (peer busy mode)\n");
+            return EC_SPAWN;
+        }
+        else
+            return rc;
     }
     else if (sscanf(argv[1], "%d", &peer_max) == 1 && peer_max >= 1)
     {
         // main mode
+
+        if (peer_max > MAX_FDS)
+        {
+            printl("peer_max can't exceed MAX_FDS = %d\n", MAX_FDS);
+            return EC_GENERIC;
+        }
 
         // spawn first peer before continuing to main mode
         if (fork() == 0)
@@ -347,8 +370,24 @@ int main(int argc, char** argv)
         }
 
         // continue to main mode
-        return main_mode(host, port, peer_max, peer_path, subscriber_path, db_path, key,
+        int rc = 
+            main_mode(host, &port, peer_max, peer_path, subscriber_path, db_path, key,
                 dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific, rnd_fd);
+
+        // mainmode can return asking to become a peer (it forks internally to do this)
+        // if so service the request here
+        if (rc == EC_BECOME_PEER)
+        {
+            char port_str[10];
+            snprintf(port_str, 10, "%d", port);
+            printl("spawning new peermode process %s:%s\n", host, port_str);
+
+            // all our FDs are close on exec
+            execlp(argv[0], argv[0], "connect", host, port_str, (char*)0);
+            printl("execlp failed (peer spawn mode)\n");
+            return EC_SPAWN;
+        }
+        return rc;
     }
     else
     {

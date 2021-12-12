@@ -58,7 +58,9 @@
 #include <secp256k1.h>
 #include <netinet/tcp.h>
 #include <utility>
-
+#include <optional>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define ASSERT(s)\
 {\
@@ -158,11 +160,11 @@ struct MessagePeerStatus
     uint32_t reserved1;
     uint32_t timestamp;
     uint16_t type;              // 0 = connected, 1 = disconnected
-    uint16_t destination_port;
-    uint8_t  destination_addr[16];
+    uint16_t remote_port;
+    uint8_t  remote_addr[16];
     uint8_t reserved2[32];
-    uint8_t local_peer[32];     // our key
     uint8_t remote_peer[32];    // their key
+    uint8_t local_peer[32];     // our key
 };
 
 struct MessageUnknown           // used when ascertaining the message type
@@ -235,7 +237,9 @@ enum ercode : int
     EC_PROTO       = 12,    // something illegal according to xrpl protocol rules happened
     EC_RNG         = 13,    // could not open or generate rng
     EC_LOST        = 14,    // someone disconnected (peer or main), cannot continue
-    EC_TIMEOUT     = 15
+    EC_TIMEOUT     = 15,    // socket or protocol timed out
+    EC_BUSY        = 16,    // 503 was returned or depended upon service busy
+    EC_BECOME_PEER = 17     // mainmode returns to uplink entrypoint to asks to become a peer instead
 
 };
 
@@ -276,12 +280,13 @@ int fd_set_flags(int fd, int new_flags);
 int create_unix_accept(char* path);
 uint8_t packet_id(char* packet_name);
 
+// if EC_BUSY is returned then ip and port are updated to a random peer to retry a connection to
 int peer_mode(
-        char* ip, int port, char* main_path, uint8_t* key, 
+        char* ip, int* port, char* main_path, uint8_t* key, 
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 int main_mode(
-        char* ip, int port, int peer_max,
+        char* ip, int* port, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
@@ -302,10 +307,13 @@ int ssl_handshake_and_upgrade(
         SSL_CTX** ctx,
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
-        uint8_t* peer_pubkey_out);
+        uint8_t* peer_pubkey_out,
+        std::vector<std::pair<std::string, int>>* peerips_out);
 
 int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t large, size_t small);
 
 void write_header(uint8_t* header, int packet_type, int packet_len);
 
 int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips);
+
+std::optional<std::pair<std::string, int>> parse_endpoint(const char* endpoint, int len);

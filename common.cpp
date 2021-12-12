@@ -269,13 +269,15 @@ int generate_node_keys(
 }
 
 //todo: clean up and optimise, check for overrun 
+// if peerips vector ptr is provided then a 503 will populate the vector with ip:port pairs
 int ssl_handshake_and_upgrade(
         int fd,
         SSL** ssl,
         SSL_CTX** ctx,
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
-        uint8_t* peer_pubkey_out)
+        uint8_t* peer_pubkey_out,
+        std::vector<std::pair<std::string, int>>* peerips_out)
 {
 
     // create secp256k1 context
@@ -388,12 +390,22 @@ int ssl_handshake_and_upgrade(
         return EC_SSL;
     }
 
-    printl("handshake reply: `%s`\n", buf3);
+    buf3[sizeof(buf3)-1] = '\0'; // ensure string ops are safe
+
+    if (DEBUG)
+        printl("handshake reply: `%s`\n", buf3);
 
     // find their key
     int found_key = 0;
+    char* found_peers = 0;
     for (int j = 0; j < bytes_read - 12; ++j)
     {
+        if (memcmp(buf3 + j, "peer-ips\":[", 11) == 0)
+        {
+            found_peers = buf3 + j;
+            break;
+        }
+
         if (memcmp(buf3 + j, "Public-Key: ", 12) == 0)
         {
             j += 12;
@@ -416,7 +428,7 @@ int ssl_handshake_and_upgrade(
             }
 
             const char* pubkey = reinterpret_cast<const char*>(buf3 + j);
-            printl("peer key is: %s\n", pubkey);
+            printl("peer connected: %s\n", pubkey);
 
 
             uint8_t buf[38];
@@ -431,12 +443,34 @@ int ssl_handshake_and_upgrade(
 
             for (int z = 2; z < 34; ++z)
                 peer_pubkey_out[z - 2] = buf[z];
-            printl("peer key raw: " FORMAT32 "\n", COPY32(peer_pubkey_out));
+            if (DEBUG)
+                printl("peer key raw: " FORMAT32 "\n", COPY32(peer_pubkey_out));
             found_key = 1;
             break;
         }
     }
 
+    if (found_peers && peerips_out)
+    {
+        // this is a 503, returning peer ips
+        char* ptr = strtok(found_peers, ",\"}");
+        while (ptr)
+        {
+            int len = strlen(ptr);
+
+            if (len >= 9)
+            {
+                std::optional<std::pair<std::string, int>> parsed = parse_endpoint(ptr, len);
+                if (parsed)
+                    peerips_out->emplace_back(std::move(*parsed));
+            }
+                
+            ptr = strtok(NULL, ",\"}");
+        }
+
+        return EC_BUSY;
+    }
+    
     if (!found_key)
     {
         printl("peer did not send a public key during connection upgrade\n");
@@ -499,7 +533,45 @@ void write_header(uint8_t* header, int packet_type, int packet_len)
     header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
 }
 
+std::optional<std::pair<std::string, int>> parse_endpoint(const char* str, int len)
+{
+    if (DEBUG && VERBOSE_DEBUG)
+        printl("called parse_endpoint(%s, %d);\n", str, len);
+    char ip[128];
+    uint32_t port;
 
+    ip[0] = '\0';
+    
+    // hacky, we should support ipv6 properly at some point
+    if (len > 5 && memcmp(str, "[::]:", 5) == 0)
+        return std::nullopt;
+
+    if (len > 8 && memcmp(str, "[::ffff:", 8) == 0)
+        str += 8;
+
+    uint32_t ip_parts[4];
+    if (sscanf(str, "%u.%u.%u.%u", &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) != 4)
+    {
+        printl("bad endpoint %s, can't read ip\n", str);
+        return std::nullopt;
+    }
+
+    size_t iplen = sprintf(ip, "%u.%u.%u.%u", ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]);
+
+    // find :
+    const char* ptr;
+    for (ptr = str; *ptr != ':' && ptr < str + len; ++ptr);
+
+    if (*ptr == ':') ptr++;
+
+    if (ptr == str || sscanf(ptr, "%u", &port) != 1)
+    {
+        printl("bad endpoint `%s` can't find port ptr=`%s`\n", str, ptr);
+        return std::nullopt;
+    }
+
+    return {{ip, port}};
+}
 
 int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips)
 {
@@ -524,44 +596,13 @@ int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pai
         if (hops == 0)
             continue;
 
-        char ip[128];
-        uint32_t port;
+        std::optional<std::pair<std::string, int>> parsed = parse_endpoint(str, len);
 
-        ip[0] = '\0';
-        
-        // hacky, we should support ipv6 properly at some point
-        if (len > 5 && memcmp(str, "[::]:", 5) == 0)
-            continue;
-
-        if (len > 8 && memcmp(str, "[::ffff:", 8) == 0)
-            str += 8;
-
-        uint32_t ip_parts[4];
-        if (sscanf(str, "%u.%u.%u.%u", &ip_parts[0], &ip_parts[1], &ip_parts[2], &ip_parts[3]) != 4)
+        if (parsed)
         {
-            printl("bad endpoint %s, can't read ip\n", str);
-            continue;
+            ips.emplace_back(std::move(*parsed));
+            counter++;
         }
-
-        size_t iplen = sprintf(ip, "%u.%u.%u.%u", ip_parts[0], ip_parts[1], ip_parts[2], ip_parts[3]);
-
-        // search backward for last :
-        const char* ptr = str + len - 1;
-        while (ptr > str)
-        {
-            if (*ptr == ':')
-                break;
-            ptr--;
-        }
-
-        if (ptr == str || sscanf(ptr+1, "%u", &port) != 1)
-        {
-            printl("bad endpoint %s can't find port\n", str);
-            continue;
-        }
-
-        ips.emplace_back(ip, port);
-        counter++;
     }
 
     return counter;
