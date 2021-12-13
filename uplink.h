@@ -1,27 +1,4 @@
-#define VERSION             "0.1"
-#define DEFAULT_SOCK_PATH   "/var/run/xrpl-uplink"
-#define DEFAULT_DB_PATH     "/var/lib/xrpl-uplink"
-#define PEER_FN             "peer.sock"
-#define SUBSCRIBER_FN       "subscriber.sock"
-#define DB_FN               "peer.db"
-#define KEY_FN              "peer.key"
-#define USER_AGENT          "xrpl-uplink"
-#define MAX_FDS 1024
-#define POLL_TIMEOUT 2000 /* ms */
-#define MAX_TIMEOUTS 20 // number of times poll can timeout before quit
-#define DEFAULT_BUF_SIZE 64
-#define DEBUG 0
-#define VERBOSE_DEBUG 0
-#define HTTP_BUFFER_SIZE 4096
-#define SSL_BUFFER_SIZE 65536
-#define PACKET_BUFFER_NORM 65536
-#define PACKET_BUFFER_MAX  67108864
-
-// seen hash cache eviction parameters
-#define EVICTION_MAX 16
-#define EVICTION_TIME 60 // eviction active after 500 seconds
-#define EVICTION_SPINS 5 // attempt to randomly evict 5 old entries for each inserted key
-
+#include "config.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <openssl/ssl.h>
@@ -61,6 +38,7 @@
 #include <optional>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include "ip.h"
 
 #define ASSERT(s)\
 {\
@@ -108,11 +86,6 @@
 
 inline pid_t my_pid;
 
-// canonical IP is ipv6 expressed uncompressed as 16 bytes
-struct IP  
-{
-    uint8_t b[16];
-};
 
 typedef union hash_
 {
@@ -126,19 +99,6 @@ struct HashComparator
     bool operator()(const Hash& lhs, const Hash& rhs) const
     {
         return memcmp(&lhs, &rhs, 32) < 0;
-    }
-};
-
-struct IPComparator
-{
-    bool operator()(const std::pair<IP, int>& lhs, const std::pair<IP, int>& rhs) const
-    {
-        int rc = memcmp(&lhs.first, &rhs.first, 16);
-        return (rc < 0 || rc == 0 && lhs.second < rhs.second);
-    }
-    bool operator()(const IP& lhs, const IP& rhs) const
-    {
-        return memcmp(&lhs, &rhs, 16) < 0;
     }
 };
 
@@ -335,8 +295,3 @@ void write_header(uint8_t* header, int packet_type, int packet_len);
 
 int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<IP, int>>& endpoints_out);
 
-std::optional<std::pair<IP, int>> parse_endpoint(const char* endpoint, int len);
-
-std::optional<IP> canonicalize_ip(const char* ip_str);
-std::string str_ip(IP const& ip);
-std::string str_ip(uint8_t* ip);
