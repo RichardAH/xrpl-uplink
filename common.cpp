@@ -277,7 +277,7 @@ int ssl_handshake_and_upgrade(
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
         uint8_t* peer_pubkey_out,
-        std::vector<std::pair<std::string, int>>* peerips_out)
+        std::vector<std::pair<IP, int>>& peerips_out)
 {
 
     // create secp256k1 context
@@ -450,7 +450,7 @@ int ssl_handshake_and_upgrade(
         }
     }
 
-    if (found_peers && peerips_out)
+    if (found_peers)
     {
         // this is a 503, returning peer ips
         char* ptr = strtok(found_peers, ",\"}");
@@ -460,9 +460,15 @@ int ssl_handshake_and_upgrade(
 
             if (len >= 9)
             {
-                std::optional<std::pair<std::string, int>> parsed = parse_endpoint(ptr, len);
+                if (DEBUG && VERBOSE_DEBUG)
+                    printl("parsing: `%s`\n", ptr);
+                std::optional<std::pair<IP, int>> parsed = parse_endpoint(ptr, len);
                 if (parsed)
-                    peerips_out->emplace_back(std::move(*parsed));
+                {
+                    if (DEBUG)
+                        printl("parsed: `%s`\n", ptr);
+                    peerips_out.emplace_back(std::move(*parsed));
+                }
             }
                 
             ptr = strtok(NULL, ",\"}");
@@ -533,7 +539,7 @@ void write_header(uint8_t* header, int packet_type, int packet_len)
     header[5] = (uint8_t)((packet_type >> 0U) & 0xFFU);
 }
 
-int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips)
+int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<IP, int>>& ips)
 {
     protocol::TMEndpoints eps;
     bool success = eps.ParseFromArray(packet_buffer, packet_len);
@@ -556,7 +562,7 @@ int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pai
         if (hops == 0)
             continue;
 
-        std::optional<std::pair<std::string, int>> parsed = parse_endpoint(str, len);
+        std::optional<std::pair<IP, int>> parsed = parse_endpoint(str, len);
 
         if (parsed)
         {
@@ -568,11 +574,12 @@ int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pai
     return counter;
 }
 
-// parse any ip (4 or 6) into a 16 byte ipv6 address
-int ip_to_int(const char* ip_in, uint8_t* ip_out)
+std::optional<IP> canonicalize_ip(const char* ip_str)
 {
-    uint8_t* ip_int = ip_out;
-    const char* ip = ip_in;
+    IP out;
+    uint8_t* ip_int = &(out.b[0]);
+    
+    const char* ip = ip_str;
 
     while (*ip == '[') ip++;
 
@@ -628,7 +635,7 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                     if (sscanf(pch, "%hx", &ip6_int[upto]) != 1)
                     {
                         printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                        return EC_ADDR;
+                        return std::nullopt;
                     }
 
                     total_filled++;
@@ -636,7 +643,7 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                     if (upto >= 8)
                     {
                         printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                        return EC_ADDR;
+                        return std::nullopt;
                     }
 
                     pch = strtok(NULL, ":");
@@ -645,7 +652,7 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                 if (upto >= 8)
                 {
                     printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                    return EC_ADDR;
+                    return std::nullopt;
                 }
 
                 upto = 0;
@@ -659,7 +666,7 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                         if (sscanf(pch, "%hx", &back6[upto]) != 1)
                         {
                             printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                            return EC_ADDR;
+                            return std::nullopt;
                         }
 
                         total_filled++;
@@ -676,14 +683,14 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                         if (upto >= 8)
                         {
                             printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                            return EC_ADDR;
+                            return std::nullopt;
                         }
                     }
 
                     if (total_filled > 7)
                     {
                         printl("failed to parse ipv6: `%s` into integer format (compressed)\n", ip);
-                        return EC_ADDR;
+                        return std::nullopt;
                     }
 
                     for (int i = 0; i < upto; ++i)
@@ -699,7 +706,7 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
                     ip6_int + 4, ip6_int + 5, ip6_int + 6, ip6_int + 7) != 8)
             {
                 printl("failed to parse ipv6: `%s` into integer format (full uncompressed)\n", ip);
-                return EC_ADDR;
+                return std::nullopt;
             }
         }
 
@@ -709,20 +716,14 @@ int ip_to_int(const char* ip_in, uint8_t* ip_out)
             ip_int[i*2 + 1] = (uint8_t)(ip6_int[i] & 0xFFU);
         }
     }
-    return EC_SUCCESS;
+
+    return {out};
 }
 
 // if the ipv6 address in ip is actually an ipv4 address then return it in normal dot notation form
-std::optional<std::string> try_down_convert_to_ipv4(const char* ip)
+std::string str_ip(uint8_t* ip)
 {
-    uint8_t ip_int[16];
-    if (ip_to_int(ip, ip_int) != EC_SUCCESS)
-    {
-        if (DEBUG)
-            printl("Could not parse IP: `%s`\n", ip);
-        return std::nullopt;
-    }
-
+    uint8_t* ip_int = ip;
     char ip_buf[64];
 
     // procecess ipv4 in ipv6 addresses as ipv4
@@ -731,12 +732,23 @@ std::optional<std::string> try_down_convert_to_ipv4(const char* ip)
         ip_int[8] == 0 && ip_int[9] == 0 && ip_int[10] == 0xFFU && ip_int[11] == 0xFFU)
     {
         snprintf(ip_buf, sizeof(ip_buf) - 1, "%u.%u.%u.%u", ip_int[12], ip_int[13], ip_int[14], ip_int[15]);
-        return {ip_buf};
+        return ip_buf;
     }
-    return std::nullopt;
+    else
+    {
+        snprintf(ip_buf, sizeof(ip_buf) - 1,
+            "%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x",
+            COPY16(ip_int));
+        return ip_buf;
+    }
 }
 
-std::optional<std::pair<std::string, int>> parse_endpoint(const char* str, int len)
+std::string str_ip(IP const& ip)
+{
+    return str_ip((uint8_t*)(ip.b));
+}
+
+std::optional<std::pair<IP, int>> parse_endpoint(const char* str, int len)
 {
     char tmp[256];
     strncpy(tmp, str, sizeof(tmp)-1);
@@ -758,18 +770,13 @@ std::optional<std::pair<std::string, int>> parse_endpoint(const char* str, int l
     }
 
     // now try parse ip
-    uint8_t ip_int[16];
-    if (ip_to_int(tmp, ip_int) != EC_SUCCESS)
+    std::optional<IP> parse_ip = canonicalize_ip(tmp);
+    if (!parse_ip)
     {
         if (DEBUG)
             printl("could not parse ip when parsing endpoint: `%s`\n", str);
         return std::nullopt;
     }
 
-    char ip[64];
-    snprintf(ip, sizeof(ip), "%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X:%02X%02X",
-            COPY16(ip_int));
-
-    return {{ip, port_int}};
-
+    return {{*parse_ip, port_int}};
 }

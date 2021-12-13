@@ -55,6 +55,30 @@ int print_usage(int argc, char** argv, const char* error)
     return EC_PARAMS;
 }
 
+// turn this process into a connect process
+void exec_connect(const char* bin, IP const& ip, int port, const char* sock_path = 0, const char* msg = 0)
+{
+    
+    std::string host = str_ip(ip);
+    char port_str[10];
+    snprintf(port_str, 10, "%d", port);
+
+    if (DEBUG || msg)
+        printl("%s %s %s\n", (msg ? msg : "exec_connect"), host.c_str(), port_str);
+
+    // all our FDs are close on exec
+    if (sock_path)
+    {
+        char sock_arg[256];
+        strcpy(sock_arg, "sockdir=");
+        strcat(sock_arg, sock_path);
+        execlp(bin, bin, "connect", host.c_str(), port_str, sock_arg, (char*)0);
+    }
+    else
+        execlp(bin, bin, "connect", host.c_str(), port_str, (char*)0);
+    die(EC_SPAWN, "could not spawn connect processor");
+}
+
 int main(int argc, char** argv)
 {
 
@@ -77,51 +101,49 @@ int main(int argc, char** argv)
         return EC_PARAMS;
     }
 
-    int port = 0;
-    char port_str[10];
-    if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
+    // parse cmdline host/IP
+    IP host_ip;
     {
-        print_usage(argc, argv, "port must be a number between 1 and 65535 inclusive");
-        return EC_PARAMS;
-    }
-    snprintf(port_str, sizeof(port_str), "%u", port);
-
-    char host[256]; host[sizeof(host) - 1] = '\0';
-    strncpy(host, argv[2], sizeof(host) - 1);
-
-    struct hostent* hn = gethostbyname(host);
-    if (hn)
-    {
-        struct in_addr** addr_list = (struct in_addr **)hn->h_addr_list;
-        char* new_host = inet_ntoa(*addr_list[0]);
-        host[0] = 0;
-        strncpy(host, new_host, sizeof(host));
-    }
-
-    {
-        // try parse as an ip endpoint
-        char tmp[256];
+        char host_str[256]; host_str[sizeof(host_str) - 1] = '\0';
+        strncpy(host_str, argv[2], sizeof(host_str) - 1);
+        struct hostent* hn = gethostbyname(host_str);
+        if (hn)
+        {
+            struct in_addr** addr_list = (struct in_addr **)hn->h_addr_list;
+            char* new_host = inet_ntoa(*addr_list[0]);
+            host_str[0] = 0;
+            strncpy(host_str, new_host, sizeof(host_str) - 1);
+        }
         
-        std::optional<std::string> ipv4 = try_down_convert_to_ipv4(host);
-        if (ipv4)
-            strncpy(tmp, ipv4->c_str(), sizeof(tmp) - 1);
-        else
-            strncpy(tmp, host, sizeof(tmp) - 1);
+        if (DEBUG)
+            printl("host lookup: %s\n", host_str);
 
-        strncat(tmp, ":", sizeof(tmp) - 1);
-        strncat(tmp, port_str, sizeof(tmp) - 1);
-        auto p = parse_endpoint(tmp, strlen(tmp));
+        std::optional<IP> p = canonicalize_ip(host_str);
         if (!p)
         {
-            printl("invalid IP/hostname: %s\n", host);
+            printl("invalid IP/hostname: %s\n", argv[2]);
             return EC_ADDR;
         }
-        strncpy(host, (ipv4 ? ipv4->c_str() : p->first.c_str()), sizeof(host));
+
+        // copy into host_ip
+        host_ip = *p;
+
+        if (DEBUG)
+            printh(host_ip.b, 16, "host ip (canonical):");
+    }
+    
+    // parse cmdline port
+    int port = 0;
+    {
+        char port_str[10];
+        if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
+        {
+            print_usage(argc, argv, "port must be a number between 1 and 65535 inclusive");
+            return EC_PARAMS;
+        }
+        snprintf(port_str, sizeof(port_str), "%u", port);
     }
 
-
-    if (DEBUG)
-       printl("host prelookup: %s\n", host);
 
 
     ddmode dd_default = DD_NOT_SET;
@@ -226,11 +248,20 @@ int main(int argc, char** argv)
         }
     }
 
+    bool db_path_is_default = false;
+    bool sock_path_is_default = false;
+
     if (db_path[0] == 0)
+    {
         strncpy(db_path, DEFAULT_DB_PATH, sizeof(db_path) - 1);
+        db_path_is_default = true;
+    }
 
     if (sock_path[0] == 0)
+    {
+        sock_path_is_default = true;
         strncpy(sock_path, DEFAULT_SOCK_PATH, sizeof(sock_path) - 1);
+    }
 
     // build keyfile path
     if (key_path[0] == 0)
@@ -328,20 +359,11 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        int rc = peer_mode(host, &port, peer_path, key, dd_default, dd_specific, rnd_fd);
+        int rc = peer_mode(&host_ip, &port, peer_path, key, dd_default, dd_specific, rnd_fd);
         if (rc == EC_BUSY)
-        {
             // the peer may be busy, however since we want the commandline of the process
             // to always reflect the actual peer the process is connected to we will exec again
-            char port_str[10];
-            snprintf(port_str, 10, "%d", port);
-            printl("peer was busy, trying: %s : %s\n", host, port_str);
-
-            // all our FDs are close on exec
-            execlp(argv[0], argv[0], "connect", host, port_str, (char*)0);
-            printl("execlp failed (peer busy mode)\n");
-            return EC_SPAWN;
-        }
+            exec_connect(argv[0], host_ip, port, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
         else
             return rc;
     }
@@ -357,50 +379,20 @@ int main(int argc, char** argv)
 
         // spawn first peer before continuing to main mode
         if (fork() == 0)
-        {
-            if (strcmp(sock_path, DEFAULT_SOCK_PATH) == 0)
-            {
-                // all our FDs are close on exec
-                execlp(argv[0], argv[0], "connect", host, argv[3], (char*)0);
-            }
-            else
-            {
-                char sock_arg[48];
-                strcpy(sock_arg, "sockdir=");
-                strcat(sock_arg, sock_path);
+            exec_connect(argv[0], host_ip, port, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
 
-                // all our FDs are close on exec
-                execlp(argv[0], argv[0], "connect", argv[2], argv[3], sock_arg, (char*)0);
-            }
-
-            // should be unreachable
-            printl("execlp failed, could not spawn peer process\n");
-            return EC_SPAWN;
-        }
 
         // continue to main mode
         int rc = 
-            main_mode(host, &port, peer_max, peer_path, subscriber_path, db_path, key,
+            main_mode(&host_ip, &port, peer_max, peer_path, subscriber_path, db_path, key,
                 dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific, rnd_fd);
 
         // mainmode can return asking to become a peer (it forks internally to do this)
         // if so service the request here
         if (rc == EC_BECOME_PEER)
-        {
-            char port_str[10];
-            snprintf(port_str, 10, "%d", port);
-
-            std::optional<std::string> ipv4 = try_down_convert_to_ipv4(host);
-            if (ipv4)
-                strncpy(host, ipv4->c_str(), sizeof(host)-1);
-
-            printl("spawning new peermode process %s:%s\n", host, port_str);
-
-            // all our FDs are close on exec
-            execlp(argv[0], argv[0], "connect", host, port_str, (char*)0);
-            printl("execlp failed (peer spawn mode)\n");
-            return EC_SPAWN;
-        }
+            exec_connect(argv[0], host_ip, port,  (sock_path_is_default ? 0 : sock_path),
+                "spawning peermode process...");
+        
         return rc;
     }
     else

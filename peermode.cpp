@@ -20,12 +20,11 @@
 }
 
 
-int connect_peer(const char* ip, int port, int* peer_fd)
+int connect_peer(IP const& ip_in, int port, int* peer_fd)
 {
 
-    std::optional<std::string> ipv4 = try_down_convert_to_ipv4(ip);
-    if (ipv4)
-        ip = ipv4->c_str();
+    std::string str = str_ip(ip_in);
+    const char* ip = str.c_str();
 
     struct sockaddr_in peer_addr;
     memset(&peer_addr, '0', sizeof(peer_addr));
@@ -125,34 +124,24 @@ int connect_main(char* main_path, int* main_fd)
 
 
 int peer_mode(
-    char* ip, int* port, char* main_path, uint8_t* our_seckey,
+    IP* ip, int* port, char* main_path, uint8_t* our_seckey,
     ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
 
     my_pid = getpid();    
 
-    // we will decompose the passed IP for use later in packet headers
-    uint8_t ip_int[16];
-    {
-        int rc = ip_to_int(ip, ip_int);
-        if (rc == EC_ADDR)
-            return EC_ADDR;
-        
-        if (DEBUG)
-            printh(ip_int, 16, "parsed ip on peermode start:");
-    }
+    std::string ip_str = str_ip(*ip);
 
     // connect to peer (TCP/IP)
-    int peer_fd = -1;  ASSERT(connect_peer(ip, *port, &peer_fd));
+    int peer_fd = -1;  ASSERT(connect_peer(*ip, *port, &peer_fd));
 
     // setup SSL
-    uint8_t our_pubkey[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
+    uint8_t our_pubkey[32]  = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
     uint8_t peer_pubkey[32] = {0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0};
     SSL_CTX* sslctx = NULL;
     SSL* ssl = NULL;
-    std::vector<std::pair<std::string, int>> peerips;
-
-    int rc = ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey, &peerips);
+    std::vector<std::pair<IP, int>> peerips;
+    int rc = ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey, peerips);
     if (rc == EC_BUSY)
     {
         // cheap and dirty: just restart the process on a random IP
@@ -160,12 +149,10 @@ int peer_mode(
         read(rnd_fd, &r, 1);
         auto& peer = peerips[r % peerips.size()];
 
-        std::optional<std::string> ipv4 = try_down_convert_to_ipv4(peer.first.c_str());
-        if (ipv4)
-            strncpy(ip, ipv4->c_str(), 256);
-        else
-            strncpy(ip, peer.first.c_str(), 256);
+        std::string str = str_ip(peer.first);
+        printl("trying: `%s`\n", str.c_str());
 
+        *ip = peer.first;
         *port = peer.second;
         return EC_BUSY;
     }
@@ -188,7 +175,7 @@ int peer_mode(
             .timestamp = (uint32_t)(time(NULL)),
             .type = 0,
             .remote_port = (uint16_t)(*port),
-            .remote_addr = { COPY16(ip_int) },
+            .remote_addr = { COPY16(ip->b) },
             .reserved2 = { 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0,0,0,0 },
             .remote_peer = { COPY32(peer_pubkey) },
             .local_peer = { COPY32(our_pubkey) }
@@ -230,7 +217,7 @@ int peer_mode(
     }
 
     if (DEBUG)
-        printl("Starting poll loop for peer %s\n", ip);
+        printl("Starting poll loop for peer %s\n", ip_str.c_str());
     
     // primary poll loop
     int poll_result = -1;
@@ -256,7 +243,7 @@ int peer_mode(
             if (peer_dead || main_dead)
             {
                 if (peer_dead)
-                    printl("Peer connection lost %s:%d\n", ip, *port);
+                    printl("Peer connection lost %s:%d\n", ip_str.c_str(), *port);
                 if (main_dead)
                     printl("Main connection lost %s\n", main_path);
                 return EC_LOST;
@@ -451,7 +438,7 @@ int peer_mode(
                         .timestamp = (uint32_t)(time(NULL)),
                         .type = (uint16_t)(packet_in_type),
                         .source_port = (uint16_t)(*port),
-                        .source_addr = { COPY16(ip_int) },
+                        .source_addr = { COPY16(ip->b) },
                         .hash = { COPY32(packet_in_hash.b) },
                         .source_peer = { COPY32(peer_pubkey) },
                         .destination_peer = { COPY32(our_pubkey) }

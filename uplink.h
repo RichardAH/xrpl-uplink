@@ -108,6 +108,12 @@
 
 inline pid_t my_pid;
 
+// canonical IP is ipv6 expressed uncompressed as 16 bytes
+struct IP  
+{
+    uint8_t b[16];
+};
+
 typedef union hash_
 {
     uint8_t b[32];
@@ -120,6 +126,19 @@ struct HashComparator
     bool operator()(const Hash& lhs, const Hash& rhs) const
     {
         return memcmp(&lhs, &rhs, 32) < 0;
+    }
+};
+
+struct IPComparator
+{
+    bool operator()(const std::pair<IP, int>& lhs, const std::pair<IP, int>& rhs) const
+    {
+        int rc = memcmp(&lhs.first, &rhs.first, 16);
+        return (rc < 0 || rc == 0 && lhs.second < rhs.second);
+    }
+    bool operator()(const IP& lhs, const IP& rhs) const
+    {
+        return memcmp(&lhs, &rhs, 16) < 0;
     }
 };
 
@@ -179,11 +198,9 @@ union Message
 {
     MessagePacket packet;
     MessageDDMode ddmode;
-    MessagePeerStatus peer;
+    MessagePeerStatus status;
     MessageUnknown unknown;
 };
-
-
 
 /**
  * N = not de-duplicated
@@ -284,11 +301,11 @@ uint8_t packet_id(char* packet_name);
 
 // if EC_BUSY is returned then ip and port are updated to a random peer to retry a connection to
 int peer_mode(
-        char* ip, int* port, char* main_path, uint8_t* key, 
+        IP* ip, int* port, char* main_path, uint8_t* key, 
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 int main_mode(
-        char* ip, int* port, int peer_max,
+        IP* ip, int* port, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
@@ -310,16 +327,16 @@ int ssl_handshake_and_upgrade(
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
         uint8_t* peer_pubkey_out,
-        std::vector<std::pair<std::string, int>>* peerips_out);
+        std::vector<std::pair<IP, int>>& peerips_out);
 
 int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t large, size_t small);
 
 void write_header(uint8_t* header, int packet_type, int packet_len);
 
-int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<std::string, int>>& ips);
+int parse_endpoints(uint8_t* packet_buffer, int packet_len, std::vector<std::pair<IP, int>>& endpoints_out);
 
-std::optional<std::pair<std::string, int>> parse_endpoint(const char* endpoint, int len);
+std::optional<std::pair<IP, int>> parse_endpoint(const char* endpoint, int len);
 
-int ip_to_int(const char* ip_in, uint8_t* ip_out);
-
-std::optional<std::string> try_down_convert_to_ipv4(const char* ip);
+std::optional<IP> canonicalize_ip(const char* ip_str);
+std::string str_ip(IP const& ip);
+std::string str_ip(uint8_t* ip);

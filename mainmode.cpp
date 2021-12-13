@@ -7,7 +7,7 @@
 
 
 int main_mode(
-        char* ip, int* port, int peer_max,
+        IP* ip, int* port, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
@@ -96,8 +96,8 @@ int main_mode(
 
     std::set<int> subscribers; // fd
     
-    std::map<int, std::pair<std::string, int>> peers;     // fd -> {ip, port}
-    std::map<std::pair<std::string, int>, int> peers_rev; // {ip, port} -> fd
+    std::map<int, std::pair<IP, int>> peers;     // fd -> {ip, port}
+    std::map<std::pair<IP, int>, int, IPComparator> peers_rev; // {ip, port} -> fd
 
     while (1)
     {
@@ -219,8 +219,9 @@ int main_mode(
                     }
                     else if (peers.find(fd) != peers.end())
                     {
+                        std::string ip = str_ip(peers[fd].first);
                         printl("peermode disconnected %s:%d\n",
-                                peers[fd].first.c_str(), peers[fd].second);
+                                ip.c_str(), peers[fd].second);
 
                         peers_rev.erase(peers[fd]);
                         peers.erase(fd);
@@ -232,25 +233,6 @@ int main_mode(
                 }
 
 
-#define EXTRACT_SOURCE_IP(ip, m)\
-{\
-    ip[0] ='\0';\
-    char* x = ip;\
-    for (int j = 0; j < 16; ++j)\
-    {\
-        int hi = (m->packet.source_addr[j] >> 4U);\
-        int lo = (m->packet.source_addr[j] & 0xFU);\
-        *x++ = (hi > 9 ? (hi - 10) + 'A' : hi + '0');\
-        *x++ = (lo > 9 ? (lo - 10) + 'A' : lo + '0');\
-        if (j % 2 == 1 && j != 15)\
-            *x++ = ':';\
-    }\
-    *x = '\0';\
-    std::optional<std::string> ipv4 = try_down_convert_to_ipv4(ip);\
-    if (ipv4)\
-        strncpy(ip, ipv4->c_str(), sizeof(ip) - 1);\
-}
-
                 if (is_subscriber)
                 {
                     // incoming message from subscriber to peers
@@ -258,15 +240,18 @@ int main_mode(
                 else
                 {
 
-                    char ip_buf[40];
-
                     // incoming message from peer to subscribers
                     Message* m = (Message*)((void*)message_header);
                     int mtype = m->unknown.flags >> 28U;
 
                     if (mtype == 2) // MessagePeerStatus
                     {
-                        EXTRACT_SOURCE_IP(ip_buf, m);
+
+                        std::string ip_str = str_ip(m->status.remote_addr);
+
+                        IP ip = { 
+                            .b = { COPY16(m->status.remote_addr) }
+                        };
 
                         recv(fdset[i].fd, 0, 0, 0); // null read
                         // reject if full
@@ -274,14 +259,15 @@ int main_mode(
                         {
                             close(fdset[i].fd);
                             fdset[i].fd = -1;
+
                             printl("dropping peer due to max_peer limit: %s:%d\n", 
-                                    ip_buf, m->packet.source_port);
+                                    ip_str.c_str(), m->packet.source_port);
                         }
                         else
                         {
-                            peers_rev[{ip_buf, m->packet.source_port}] = fdset[i].fd;
-                            peers[fdset[i].fd] = {ip_buf, m->packet.source_port};
-                            printl("peer added: [%s]:%d\n", ip_buf, m->packet.source_port);
+                            peers_rev[{ip, m->packet.source_port}] = fdset[i].fd;
+                            peers[fdset[i].fd] = {ip, m->packet.source_port};
+                            printl("peer added: [%s]:%d\n", ip_str.c_str(), m->packet.source_port);
                         }
                     }
                     else if (mtype == 0)
@@ -289,10 +275,9 @@ int main_mode(
 
                         if (DEBUG)
                         {
-                            EXTRACT_SOURCE_IP(ip_buf, m);
-
+                            std::string ip = str_ip(m->packet.source_addr);
                             printl("packet: %d size: %d ip: %s port: %d\n", 
-                                m->packet.type, m->packet.size, ip_buf, m->packet.source_port);
+                                m->packet.type, m->packet.size, ip.c_str(), m->packet.source_port);
                         }
 
                         uint32_t packet_expected = sizeof(MessagePacket) + m->packet.size;
@@ -362,34 +347,28 @@ int main_mode(
 
                         if (packet_type == mtENDPOINTS)
                         {
-                            std::vector<std::pair<std::string, int>> ips;
+                            std::vector<std::pair<IP, int>> endpoints;
                             int c = parse_endpoints(
-                                    packet_buffer + sizeof(Message), packet_expected - sizeof(Message), ips);
+                                    packet_buffer + sizeof(Message), packet_expected - sizeof(Message), endpoints);
                             //printl("parse_endpoints = %d\n", c);
                             int counter = peer_max - peers.size();
                             if (counter > 0)
                             {
                                 printl("trying to spawn %d peers\n", counter);
-                                for (auto& p : ips)
+                                for (auto& p : endpoints)
                                 {
                                     if (counter-- <= 0)
                                         break;
                                     // we're going to fork, then return in the fork to uplink.cpp
                                     // whilst asking it to turn us into a peer
-                                    const char* peer_ip = p.first.c_str();
-                                    int peer_port = p.second;
                                     if (fork() == 0)
                                     {
-                                        strcpy(ip, peer_ip);
-                                        *port = peer_port;
+                                        *ip = p.first;
+                                        *port = p.second;
                                         return EC_BECOME_PEER;
                                     }
                                 }
                             }
-                            //    printl("endpoint: %s : %d\n", p.first.c_str(), p.second);
-
-                            // RH UPTO: connect to and store endpoint peers
-                            // RH TODO: collect endpoints from 503s
                         }
                     }
                 }
