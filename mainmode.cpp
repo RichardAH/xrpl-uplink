@@ -236,6 +236,28 @@ int main_mode(
                 if (is_subscriber)
                 {
                     // incoming message from subscriber to peers
+                    
+                    // RH TODO: add proper logic to distribute incoming message to peers
+
+                    uint8_t buffer_in[1048576];
+
+                    size_t bytes_read = recv(fdset[i].fd, buffer_in, sizeof(buffer_in), 0);
+
+                    if (bytes_read == 1048576)
+                    {
+                        printl("skipping large subscriber packet > 1048576\n");
+                    }
+                    else
+                    {
+                        if (DEBUG)
+                            printl("incoming message from subscriber: %ld bytes\n", bytes_read);
+                        for (auto& p: peers)
+                        {
+                            if (DEBUG)
+                                printl("sending to fd=%d\n", p.first);
+                            write(p.first, buffer_in, bytes_read);
+                        }
+                    }
                 }
                 else
                 {
@@ -282,11 +304,8 @@ int main_mode(
 
                         uint32_t packet_expected = sizeof(MessagePacket) + m->packet.size;
 
-                        // todo: process mtENDPOINTS, construct new peers
-
                         uint16_t& packet_type = m->packet.type;
                         Hash* packet_hash = reinterpret_cast<Hash*>(m->packet.hash);
-
 
                         // check dd rules
                         {

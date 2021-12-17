@@ -150,7 +150,8 @@ int peer_mode(
         auto& peer = peerips[r % peerips.size()];
 
         std::string str = str_ip(peer.first);
-        printl("trying: `%s`\n", str.c_str());
+        if (DEBUG)
+            printl("trying: `%s`\n", str.c_str());
 
         *ip = peer.first;
         *port = peer.second;
@@ -252,7 +253,7 @@ int peer_mode(
 
         // check if there are incoming bytes from TCP
         if (fdset[0].revents & POLLIN)
-        while(1)
+        do
         {
             size_t dummy = 0;
             SSL_read_ex(ssl, 0, 0, &dummy);
@@ -461,8 +462,7 @@ int peer_mode(
                 packet_in_received_size = 0;
                 packet_in_uncompressed_size = 0;
             }
-        } 
-
+        } while(0);
 
         // check if there are pending messages to read from main-mode process
         if (fdset[1].revents & POLLIN)
@@ -478,13 +478,16 @@ int peer_mode(
 
             int msg_type = message.unknown.flags >> 28U;
 
-            printl("message received from mainmode type=%d\n", msg_type);
+            if (DEBUG)
+                printl("message received from mainmode type=%d\n", msg_type);
             
             switch (msg_type)
             {
                 // incoming packet from subscriber
                 case M_PACKET:
                 {
+                    if (DEBUG && VERBOSE_DEBUG)
+                        printl("incoming packet peermode\n");
 
                     Hash* packet_out_hash = reinterpret_cast<Hash*>(&message.packet.hash);
                     uint16_t packet_out_type = message.packet.type;
@@ -512,7 +515,8 @@ int peer_mode(
                         // perform drop by doing a null read and breaking out
                         if (drop)
                         {
-                            printl("dropping outgoing packet %d according to ddmode\n", packet_out_type);
+                            if (DEBUG)
+                                printl("dropping outgoing packet %d according to ddmode\n", packet_out_type);
                             recv(main_fd, 0, 0, 0);
                             break;
                         }
@@ -529,14 +533,21 @@ int peer_mode(
                         PACKET_BUFFER_NORM, PACKET_BUFFER_MAX));
 
                     // read the packet
-                    if (recv(main_fd, packet_out_buffer, packet_out_expected_size, 0) 
-                            != packet_out_expected_size)
-                        die(EC_UNIX, "error while reading message (type=packet) from main-mode process\n");
-
-                    // forward packet to peer
+                    size_t bytes_read = recv(main_fd, packet_out_buffer, packet_out_expected_size, 0);
+                    if (bytes_read != packet_out_expected_size)
                     {
+                        printl("bytes_read = %ld, packet_out_expected_size = %d\n",
+                            bytes_read, packet_out_expected_size);
+                        //die(EC_UNIX, "error while reading message (type=packet) from main-mode process\n");
+                    }
+                    else
+                    {
+                        // forward packet to peer
                         uint8_t header[6];
                         write_header(header, packet_out_type, packet_out_size);
+
+                        if (DEBUG)
+                            printl("writing out %d\n", packet_out_size);
                        
                         SSL_write(ssl, header, 6);
                         SSL_write(ssl, packet_out_buffer + sizeof(Message), packet_out_size); 

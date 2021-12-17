@@ -63,7 +63,7 @@ void exec_connect(const char* bin, IP const& ip, int port, const char* sock_path
     char port_str[10];
     snprintf(port_str, 10, "%d", port);
 
-    if (DEBUG || msg)
+    if (DEBUG)
         printl("%s %s %s\n", (msg ? msg : "exec_connect"), host.c_str(), port_str);
 
     // all our FDs are close on exec
