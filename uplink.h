@@ -39,6 +39,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <algorithm>
 #include "ip.h"
 
 #define ASSERT(s)\
@@ -95,6 +96,9 @@ typedef union hash_
     uint64_t q[4];
 } Hash;
 
+using PubKey = Hash;
+
+
 struct HashComparator
 {
     bool operator()(const Hash& lhs, const Hash& rhs) const
@@ -112,6 +116,14 @@ enum MessageType : uint8_t
     M_PACKET = 0,
     M_DDMODE = 1,
     M_PEERSTATUS = 2
+};
+
+enum RoutingMode: uint8_t
+{
+    R_ALL = 0,
+    R_MASK = 1,
+    R_RANDOM = 2,
+    R_ROBIN = 3
 };
 
 /**

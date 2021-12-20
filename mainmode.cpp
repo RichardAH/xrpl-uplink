@@ -5,12 +5,26 @@
 // MAIN MODE
 // ---------
 
+int prng (int i)
+{
+    return std::rand() % i;
+}
 
 int main_mode(
         IP* ip, int* port, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
+
+
+    uint64_t random_words[32];
+    if (read(rnd_fd, random_words, sizeof(random_words)) != sizeof(random_words))
+    {
+        printl("Could not read /dev/random\n");
+        return EC_RNG;
+    }
+
+    std::srand(random_words[0] ^ time(NULL));
 
     my_pid = getpid();
 
@@ -97,7 +111,10 @@ int main_mode(
     std::set<int> subscribers; // fd
     
     std::map<int, std::pair<IP, int>> peers;     // fd -> {ip, port}
+    std::map<int, PubKey> peers_key;             // fd -> pubkey
     std::map<std::pair<IP, int>, int, IPComparator> peers_rev; // {ip, port} -> fd
+
+    std::map<int, uint64_t> subscribers_counter; // fd -> counter | counts which peer we are up to in a round robin
 
     while (1)
     {
@@ -172,6 +189,7 @@ int main_mode(
                 else if (is_subscriber)
                 {
                     subscribers.emplace(new_fd);
+                    subscribers_counter[new_fd] = 0;
                     is_subscriber = 0;
                 }
                 else    // peer-mode connecting in, send dd info
@@ -216,15 +234,18 @@ int main_mode(
                     {
                         printl("subscriber disconnected\n");
                         subscribers.erase(fd);
+                        subscribers_counter.erase(fd);
+
                     }
                     else if (peers.find(fd) != peers.end())
                     {
                         std::string ip = str_ip(peers[fd].first);
                         printl("peermode disconnected %s:%d\n",
-                                ip.c_str(), peers[fd].second);
+                            ip.c_str(), peers[fd].second);
 
                         peers_rev.erase(peers[fd]);
                         peers.erase(fd);
+                        peers_key.erase(fd);
                     }
 
                     // set fd negative
@@ -251,11 +272,116 @@ int main_mode(
                     {
                         if (DEBUG)
                             printl("incoming message from subscriber: %ld bytes\n", bytes_read);
-                        for (auto& p: peers)
+
+                        Message* m = reinterpret_cast<Message*>(buffer_in);
+                        int mtype = m->unknown.flags >> 28U;
+                        if (mtype == M_PACKET)
                         {
-                            if (DEBUG)
-                                printl("sending to fd=%d\n", p.first);
-                            write(p.first, buffer_in, bytes_read);
+                            int opcode = (m->unknown.flags >> 16U) & 0xFFU;
+
+                            switch (opcode)
+                            {
+                                case R_ALL:
+                                {
+                                    for (auto& p: peers)
+                                    {
+                                        if (DEBUG)
+                                            printl("sending all: fd=%d\n", p.first);
+                                        write(p.first, buffer_in, bytes_read);
+                                    }
+
+                                    break;
+                                }
+
+                                case R_MASK:
+                                {
+                                    uint8_t mask = m->unknown.flags & 0xFFU;
+
+                                    uint8_t byte_match = mask / 8U;
+                                    uint8_t bit_match = mask & 8U;
+
+                                    for (auto& p: peers)
+                                    {
+                                        if (peers_key.find(p.first) == peers_key.end())
+                                            continue;
+
+                                        if (memcmp(
+                                                reinterpret_cast<const void*>(&(peers_key[p.first].b)),
+                                                reinterpret_cast<const void*>(&(m->packet.destination_peer)),
+                                                byte_match) == 0)
+                                        {
+                                            if (bit_match > 0)
+                                            {
+                                                uint8_t a = peers_key[p.first].b[byte_match];
+                                                uint8_t b = m->packet.destination_peer[byte_match];
+                                                uint8_t bitmask = 0xFFU;        // all 1s
+                                                bitmask >>= (8U - bit_match);   // erase some bits on the rhs
+                                                bitmask <<= (8U - bit_match);
+                                                if ((a & bitmask) == (b & bitmask))
+                                                {
+                                                    // mask matches
+                                                    if (DEBUG)
+                                                        printh(peers_key[p.first].b, 32, "sending bitmask: ");
+                                                    write(p.first, buffer_in, bytes_read);
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    break;
+                                }
+                                
+                                case R_RANDOM:
+                                {
+                                    int count = m->packet.flags & 0xFFFFU;
+                                    if (count >= peers.size())
+                                    {
+                                        for (auto& p: peers)
+                                            write(p.first, buffer_in, bytes_read);
+                                    }
+                                    else
+                                    {
+                                        std::vector<int> fds;
+                                        for (auto& p: peers)
+                                            fds.push_back(p.first);
+
+                                        std::random_shuffle(fds.begin(), fds.end());
+                                        
+                                        for (int i = 0; i < count; ++i)
+                                        {
+                                            if (DEBUG)
+                                                printl("sending random: fd=%d [%d/%d]\n",
+                                                    fds[i], i, count);
+
+                                            write(fds[i], buffer_in, bytes_read);
+                                        }
+                                    }
+                                    break;
+                                }
+
+                                case R_ROBIN:
+                                {
+
+                                    int count = m->packet.flags & 0xFFFFU;
+
+                                    uint64_t upto = (subscribers_counter[fdset[i].fd] >> 10U) % peers.size();
+
+                                    for (auto& p: peers)
+                                    {
+                                        if (upto-- == 0)
+                                        {
+                                            if (DEBUG)
+                                                printl("sending round robin: fd=%d, count=%lu\n",
+                                                    p.first, subscribers_counter[fdset[i].fd]);
+
+                                            write(p.first, buffer_in, bytes_read);
+                                            break;
+                                        }
+                                    }
+                                    subscribers_counter[fdset[i].fd] += count;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -289,6 +415,8 @@ int main_mode(
                         {
                             peers_rev[{ip, m->packet.source_port}] = fdset[i].fd;
                             peers[fdset[i].fd] = {ip, m->packet.source_port};
+                            peers_key.emplace(std::make_pair(fdset[i].fd, 
+                                        PubKey{ .b = {COPY32(m->status.remote_peer)} }));
                             printl("peer added: [%s]:%d\n", ip_str.c_str(), m->packet.source_port);
                         }
                     }
