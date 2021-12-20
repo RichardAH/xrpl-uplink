@@ -17,12 +17,13 @@ Each op-code changes the meaning of the operands data section.
 
 Op code | Operand Bits | Description
 --------|----------|------------
-0 |           | send to all peers matching a `peermask`
+0 |           | send all peers
+1 |           | send to all peers matching a `peermask`
 | ^ | `Bit 0-8`  | reserved - 0
 | ^ | `Bit 8-16` | bitmask for node pubkey ^
-1 |            | send to `count` random peers
+2 |            | send to `count` random peers
 | ^ | `Bit 0-16` | count [uint16_t]
-2 |            | send to the next peer in the round robin queue, increment subpeer counter by count ~
+3 |            | send to the next peer in the round robin queue, increment subpeer counter by count ~
 | ^ | `Bit 0-16` | count [uint16_t]
 ...|  | reserved|
 
