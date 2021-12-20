@@ -38,6 +38,7 @@
 #include <optional>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/ioctl.h>
 #include "ip.h"
 
 #define ASSERT(s)\
@@ -218,7 +219,8 @@ enum ercode : int
     EC_LOST        = 14,    // someone disconnected (peer or main), cannot continue
     EC_TIMEOUT     = 15,    // socket or protocol timed out
     EC_BUSY        = 16,    // 503 was returned or depended upon service busy
-    EC_BECOME_PEER = 17     // mainmode returns to uplink entrypoint to asks to become a peer instead
+    EC_BECOME_PEER = 17,    // mainmode returns to uplink entrypoint to asks to become a peer instead
+    EC_ALREADY     = 18     // this peer already is connected on another process
 
 };
 

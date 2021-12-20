@@ -122,6 +122,12 @@ int connect_main(char* main_path, int* main_fd)
     return EC_SUCCESS;
 }
 
+size_t bytes_available(int fd)
+{
+    size_t b = 0;
+    ioctl(fd,FIONREAD,&b);
+    return b;
+}
 
 int peer_mode(
     IP* ip, int* port, char* main_path, uint8_t* our_seckey,
@@ -129,8 +135,74 @@ int peer_mode(
 {
 
     my_pid = getpid();    
+    pid_t parent_pid = getppid();
 
     std::string ip_str = str_ip(*ip);
+
+    // first check if this is a duplicate of another connect process by iterating the children of the parent
+    // (sibbling processes)
+    char sibbling_fn[1024]; sibbling_fn[0] = '\0';
+    snprintf(sibbling_fn, 1024, "/proc/%d/task/%d/children", parent_pid, parent_pid);
+
+    int sibbling_fd = open(sibbling_fn, O_RDONLY);
+    if (sibbling_fd >= 0)
+    {
+
+        fd_set_flags(sibbling_fd, O_NONBLOCK | O_CLOEXEC);
+
+        char sibbling_pids[1024*1024];
+        size_t bytes_read = read(sibbling_fd, sibbling_pids, sizeof(sibbling_pids));
+        close(sibbling_fd);
+
+        if (bytes_read > 0)
+        {
+            for (char* pid_str = strtok(sibbling_pids, " "); pid_str != NULL; pid_str = strtok(NULL, " "))
+            {
+
+                int pid = 0;
+                if (sscanf(pid_str, "%d", &pid) != 1)
+                    continue;
+
+                if (pid == my_pid)
+                    continue;
+
+                snprintf(sibbling_fn, 1024, "/proc/%s/cmdline", pid_str);
+                int fd = open(sibbling_fn, O_RDONLY);
+                if (fd)
+                {
+                    fd_set_flags(fd, O_NONBLOCK | O_CLOEXEC);
+                    char args[1024];
+                    size_t bytes_read = read(fd, args, sizeof(args));
+                    close(fd);
+                    if (bytes_read > 0)
+                    {
+                        char* sib_ip = args;        // arg 0 [ ./uplink ]
+                        sib_ip += strlen(sib_ip) + 1;   // arg 1 [ connect  ]
+                        if (strcmp(sib_ip, "connect") == 0)
+                        {
+                            sib_ip += strlen(sib_ip) + 1;                   // arg 2   [ ip ]
+                            char* sib_port_str = sib_ip + strlen(sib_ip) + 1;   // arg 3 [ port ]
+
+                            if (DEBUG)
+                                printl("sibbling ip: %s, port: %s\n", sib_ip, sib_port_str);
+
+                            int sib_port = 0;
+                            
+                            if (sscanf(sib_port_str, "%d", &sib_port) == 1 && sib_port == *port &&
+                                strcmp(sib_ip, ip_str.c_str()) == 0)
+                            {
+                                // this connection already exists, die
+                                die(EC_ALREADY, "peer connection already exists with pid=%d", pid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // execution to here means we will boot the peer
+    printl("starting peer %s:%d...\n", ip_str.c_str(), *port);
 
     // connect to peer (TCP/IP)
     int peer_fd = -1;  ASSERT(connect_peer(*ip, *port, &peer_fd));
@@ -239,8 +311,8 @@ int peer_mode(
 
         // check if the peer socket died
         {
-            bool peer_dead = (fdset[0].revents & (POLLERR | POLLHUP | POLLNVAL)) || read(peer_fd, 0, 0);
-            bool main_dead = (fdset[1].revents & (POLLERR | POLLHUP | POLLNVAL)) || read(main_fd, 0, 0);
+            bool peer_dead = (fdset[0].revents & (POLLERR | POLLHUP | POLLNVAL));// || read(peer_fd, 0, 0);
+            bool main_dead = (fdset[1].revents & (POLLERR | POLLHUP | POLLNVAL));// || read(main_fd, 0, 0);
             if (peer_dead || main_dead)
             {
                 if (peer_dead)
@@ -549,8 +621,11 @@ int peer_mode(
                         if (DEBUG)
                             printl("writing out %d\n", packet_out_size);
                        
-                        SSL_write(ssl, header, 6);
-                        SSL_write(ssl, packet_out_buffer + sizeof(Message), packet_out_size); 
+                        for (int i = -6; i < 0; ++i)
+                            packet_out_buffer[sizeof(Message) + i] = header[i + 6];
+
+                        //SSL_write(ssl, header, 6);
+                        SSL_write(ssl, packet_out_buffer + sizeof(Message) - 6, packet_out_size + 6); 
                     }
                     break;
                 }
