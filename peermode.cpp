@@ -473,12 +473,16 @@ int peer_mode(
                         d = DD_ALL;
 
                     // for mtPING the default is to drop (since we already processed a pong above)
-                    if (packet_in_type == 3)
+                    if (packet_in_type == mtPING)
                         d = DD_DROP;
 
                     // however if the user specifically set mtPING: then we will forward
                     if (dd_specific.find(packet_in_type) != dd_specific.end())
                         d = dd_specific[packet_in_type];
+                   
+                    // endpoints packets should be deduplicated in the main-mode process
+                    if (packet_in_type == mtENDPOINTS)
+                        d = DD_NONE;
 
                          drop  =    d == DD_BLACKHOLE   || d == DD_DROP     || d == DD_DROP_N;
                     bool dedup =    d == DD_ALL         || d == DD_PEER     || d == DD_SQUELCH;
@@ -620,11 +624,10 @@ int peer_mode(
 
                         if (DEBUG)
                             printl("writing out %d\n", packet_out_size);
-                       
+                      
+                        // rippled appears to have an affinity for tls boundary aligned protocol messages 
                         for (int i = -6; i < 0; ++i)
                             packet_out_buffer[sizeof(Message) + i] = header[i + 6];
-
-                        //SSL_write(ssl, header, 6);
                         SSL_write(ssl, packet_out_buffer + sizeof(Message) - 6, packet_out_size + 6); 
                     }
                     break;

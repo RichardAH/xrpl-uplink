@@ -1,4 +1,4 @@
-#define VERSION             "0.2"
+#define VERSION             "0.2.1"
 #define DEFAULT_SOCK_PATH   "/var/run/xrpl-uplink"
 #define DEFAULT_DB_PATH     "/var/lib/xrpl-uplink"
 #define PEER_FN             "peer.sock"
