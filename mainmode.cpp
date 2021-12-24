@@ -413,29 +413,30 @@ int main_mode(
                     if (mtype == 2) // MessagePeerStatus
                     {
 
-                        std::string ip_str = str_ip(m->status.remote_addr);
+                        std::string peer_ip_str = str_ip(m->status.remote_addr);
 
-                        IP ip = { 
+                        IP peer_ip = { 
                             .b = { COPY16(m->status.remote_addr) }
                         };
 
                         recv(fdset[i].fd, 0, 0, 0); // null read
-                        // reject if full
-                        if (peers.size() >= peer_max)
+                        // reject if full and not our base/starting peer
+                        if (peers.size() >= peer_max && 
+                            !(peer_ip_str == str_ip(*ip) && m->status.remote_port == *port))
                         {
                             close(fdset[i].fd);
                             fdset[i].fd = -1;
 
                             printl("dropping peer due to max_peer limit: %s:%d\n", 
-                                    ip_str.c_str(), m->packet.source_port);
+                                    peer_ip_str.c_str(), m->status.remote_port);
                         }
                         else
                         {
-                            peers_rev[{ip, m->packet.source_port}] = fdset[i].fd;
-                            peers[fdset[i].fd] = {ip, m->packet.source_port};
+                            peers_rev[{peer_ip, m->status.remote_port}] = fdset[i].fd;
+                            peers[fdset[i].fd] = {peer_ip, m->status.remote_port};
                             peers_key.emplace(std::make_pair(fdset[i].fd, 
                                         PubKey{ .b = {COPY32(m->status.remote_peer)} }));
-                            printl("peer added: [%s]:%d\n", ip_str.c_str(), m->packet.source_port);
+                            printl("peer added: [%s]:%d\n", peer_ip_str.c_str(), m->status.remote_port);
                         }
                     }
                     else if (mtype == 0)
