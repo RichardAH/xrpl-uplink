@@ -239,13 +239,23 @@ int main_mode(
                     }
                     else if (peers.find(fd) != peers.end())
                     {
-                        std::string ip = str_ip(peers[fd].first);
+                        std::string peer_ip = str_ip(peers[fd].first);
                         printl("peermode disconnected %s:%d\n",
-                            ip.c_str(), peers[fd].second);
+                            peer_ip.c_str(), peers[fd].second);
+
+                        int peer_port = peers[fd].second;
 
                         peers_rev.erase(peers[fd]);
                         peers.erase(fd);
                         peers_key.erase(fd);
+
+                        if (peer_ip == str_ip(*ip) && peer_port == *port)
+                        {
+                            // our core / first ip disconnected
+                            // so lets try reconnect it
+                            if (fork() == 0)
+                                return EC_BECOME_PEER;
+                        } 
                     }
 
                     // set fd negative
@@ -258,7 +268,7 @@ int main_mode(
                 {
                     // incoming message from subscriber to peers
                     
-                    // RH TODO: add proper logic to distribute incoming message to peers
+                    // RH TODO: manage this buffer properly
 
                     uint8_t buffer_in[1048576];
 
@@ -270,14 +280,18 @@ int main_mode(
                     }
                     else
                     {
-                        if (DEBUG)
-                            printl("incoming message from subscriber: %ld bytes\n", bytes_read);
+//                        if (DEBUG)
 
                         Message* m = reinterpret_cast<Message*>(buffer_in);
                         int mtype = m->unknown.flags >> 28U;
+                        
+                        printl("incoming message from subscriber: %ld bytes, mtype=%d\n", bytes_read, mtype);
+
                         if (mtype == M_PACKET)
                         {
                             int opcode = (m->unknown.flags >> 16U) & 0xFFU;
+
+                            printl("opcode: %d\n", opcode);
 
                             switch (opcode)
                             {
@@ -334,10 +348,16 @@ int main_mode(
                                 case R_RANDOM:
                                 {
                                     int count = m->packet.flags & 0xFFFFU;
+                                    printl("R_RANDOM: count=%d\n", count);
                                     if (count >= peers.size())
                                     {
+                                        int i = 0;
                                         for (auto& p: peers)
+                                        {
+                                            printl("sending random: fd=%d [%d/%d]\n",
+                                                    p.first, i++, count);
                                             write(p.first, buffer_in, bytes_read);
+                                        }
                                     }
                                     else
                                     {
@@ -349,10 +369,8 @@ int main_mode(
                                         
                                         for (int i = 0; i < count; ++i)
                                         {
-                                            if (DEBUG)
-                                                printl("sending random: fd=%d [%d/%d]\n",
+                                            printl("sending random: fd=%d [%d/%d]\n",
                                                     fds[i], i, count);
-
                                             write(fds[i], buffer_in, bytes_read);
                                         }
                                     }

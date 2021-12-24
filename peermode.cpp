@@ -554,7 +554,7 @@ int peer_mode(
 
             int msg_type = message.unknown.flags >> 28U;
 
-            if (DEBUG)
+//            if (DEBUG)
                 printl("message received from mainmode type=%d\n", msg_type);
             
             switch (msg_type)
