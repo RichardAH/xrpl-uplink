@@ -364,14 +364,16 @@ int ssl_handshake_and_upgrade(
     size_t buf3len = 0;
     buf3len = snprintf(buf3, 2047, 
             "GET / HTTP/1.1\r\n"
-            "User-Agent: rippled-1.8.0\r\n"
-            "Upgrade: XRPL/2.0\r\n"
+            "User-Agent: rippled-2.2.2\r\n"
+            "Upgrade: XRPL/2.1\r\n"
             "Connection: Upgrade\r\n"
             "Connect-As: Peer\r\n"
             "Crawl: private\r\n"
             "Session-Signature: %s\r\n"
             "Public-Key: %s\r\n\r\n", buf2, b58);
 
+    if (DEBUG)
+        printf("`%s`\n", buf3);
 
     if (SSL_write(*ssl, buf3, buf3len) <= 0)
     {
