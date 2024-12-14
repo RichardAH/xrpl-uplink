@@ -9,7 +9,7 @@ int print_usage(int argc, char** argv, const char* error)
     "An XRPL peer-protocol endpoint for connecting local subscribers (applications) to the XRPL mesh network.\n"
     "Main-mode:\n"
     "\tThe process that subscribers connect to. Maintains a swarm of peer mode processes up to max-peers\n"
-    "\tUsage: %s <max-peers> <first-peer-ip> <first-peer-port> \\\n"
+    "\tUsage: %s <max-peers> <first-peer-ip> <first-peer-port> <network id>\\\n"
     "\t       %.*s [<default-ddmode> [mtPACKET:ddmode] ...] \\\n"
     "\t       %.*s [sockdir=<path>] [dbdir=<path>] [keyfile=<path>]\n"
     "Peer-mode:\n"
@@ -56,12 +56,15 @@ int print_usage(int argc, char** argv, const char* error)
 }
 
 // turn this process into a connect process
-void exec_connect(const char* bin, IP const& ip, int port, const char* sock_path = 0, const char* msg = 0)
+void exec_connect(const char* bin, IP const& ip, int port, int netid, const char* sock_path = 0, const char* msg = 0)
 {
     
     std::string host = str_ip(ip);
     char port_str[10];
     snprintf(port_str, 10, "%d", port);
+
+    char netid_str[10];
+    snprintf(netid_str, 10, "%d", netid);
 
     if (DEBUG)
         printl("%s %s %s\n", (msg ? msg : "exec_connect"), host.c_str(), port_str);
@@ -72,7 +75,7 @@ void exec_connect(const char* bin, IP const& ip, int port, const char* sock_path
         char sock_arg[256];
         strcpy(sock_arg, "sockdir=");
         strcat(sock_arg, sock_path);
-        execlp(bin, bin, "connect", host.c_str(), port_str, sock_arg, (char*)0);
+        execlp(bin, bin, "connect", host.c_str(), port_str, netid_str, sock_arg, (char*)0);
     }
     else
         execlp(bin, bin, "connect", host.c_str(), port_str, (char*)0);
@@ -136,7 +139,7 @@ int main(int argc, char** argv)
     int port = 0;
     {
         char port_str[10];
-        if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65525)
+        if (sscanf(argv[3], "%d", &port) != 1 || port < 1 || port > 65535)
         {
             print_usage(argc, argv, "port must be a number between 1 and 65535 inclusive");
             return EC_PARAMS;
@@ -144,11 +147,20 @@ int main(int argc, char** argv)
         snprintf(port_str, sizeof(port_str), "%u", port);
     }
 
-
+    int netid = 0;
+    {
+        char netid_str[10];
+        if (sscanf(argv[3], "%d", &netid) != 1 || port < 0 || port > 65535)
+        {
+            print_usage(argc, argv, "netid must be a number between 1 and 65535 inclusive");
+            return EC_PARAMS;
+        }
+        snprintf(netid_str, sizeof(netid_str), "%u", netid);
+    }
 
     ddmode dd_default = DD_NOT_SET;
-    if (argc >= 5)
-        dd_default = parse_dd(argv[4]);
+    if (argc >= 6)
+        dd_default = parse_dd(argv[5]);
 
     if (dd_default == DD_INVALID)
     {
@@ -164,7 +176,7 @@ int main(int argc, char** argv)
 
     // parse dds and remaining arguments
     {
-        for (int i = 5; i < argc; ++i)
+        for (int i = 6; i < argc; ++i)
         {
             char pktype[PATH_MAX]; pktype[0] = '\0'; char* pk = pktype;
             char ddtype[PATH_MAX]; ddtype[0] = '\0'; char* dd = ddtype;
@@ -359,11 +371,11 @@ int main(int argc, char** argv)
     if (strlen(argv[1]) == 7 && memcmp(argv[1], "connect", 7) == 0)
     {
         // peer mode
-        int rc = peer_mode(&host_ip, &port, peer_path, key, dd_default, dd_specific, rnd_fd);
+        int rc = peer_mode(&host_ip, &port, netid, peer_path, key, dd_default, dd_specific, rnd_fd);
         if (rc == EC_BUSY)
             // the peer may be busy, however since we want the commandline of the process
             // to always reflect the actual peer the process is connected to we will exec again
-            exec_connect(argv[0], host_ip, port, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
+            exec_connect(argv[0], host_ip, port, netid, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
         else
             return rc;
     }
@@ -379,18 +391,18 @@ int main(int argc, char** argv)
 
         // spawn first peer before continuing to main mode
         if (fork() == 0)
-            exec_connect(argv[0], host_ip, port, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
+            exec_connect(argv[0], host_ip, port, netid, (sock_path_is_default ? 0 : sock_path), "peer busy, trying:");
 
 
         // continue to main mode
         int rc = 
-            main_mode(&host_ip, &port, peer_max, peer_path, subscriber_path, db_path, key,
+            main_mode(&host_ip, &port, netid, peer_max, peer_path, subscriber_path, db_path, key,
                 dd_default == DD_NOT_SET ? DD_ALL : dd_default, dd_specific, rnd_fd);
 
         // mainmode can return asking to become a peer (it forks internally to do this)
         // if so service the request here
         if (rc == EC_BECOME_PEER)
-            exec_connect(argv[0], host_ip, port,  (sock_path_is_default ? 0 : sock_path),
+            exec_connect(argv[0], host_ip, port, netid, (sock_path_is_default ? 0 : sock_path),
                 "spawning peermode process...");
         
         return rc;

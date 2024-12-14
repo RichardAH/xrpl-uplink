@@ -277,7 +277,8 @@ int ssl_handshake_and_upgrade(
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
         uint8_t* peer_pubkey_out,
-        std::vector<std::pair<IP, int>>& peerips_out)
+        std::vector<std::pair<IP, int>>& peerips_out,
+        int netid)
 {
 
     // create secp256k1 context
@@ -370,7 +371,8 @@ int ssl_handshake_and_upgrade(
             "Connect-As: Peer\r\n"
             "Crawl: private\r\n"
             "Session-Signature: %s\r\n"
-            "Public-Key: %s\r\n\r\n", buf2, b58);
+            "Public-Key: %s\r\n"
+            "Network-ID: %d\r\n\r\n", buf2, b58, netid);
 
     if (DEBUG)
         printf("`%s`\n", buf3);

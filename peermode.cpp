@@ -129,7 +129,7 @@ size_t bytes_available(int fd)
 }
 
 int peer_mode(
-    IP* ip, int* port, char* main_path, uint8_t* our_seckey,
+    IP* ip, int* port, int netid, char* main_path, uint8_t* our_seckey,
     ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {
 
@@ -212,7 +212,7 @@ int peer_mode(
     SSL_CTX* sslctx = NULL;
     SSL* ssl = NULL;
     std::vector<std::pair<IP, int>> peerips;
-    int rc = ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey, peerips);
+    int rc = ssl_handshake_and_upgrade(peer_fd, &ssl, &sslctx, our_seckey, our_pubkey, peer_pubkey, peerips, netid);
     if (rc == EC_BUSY)
     {
         // cheap and dirty: just restart the process on a random IP

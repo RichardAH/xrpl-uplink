@@ -11,7 +11,7 @@ int prng (int i)
 }
 
 int main_mode(
-        IP* ip, int* port, int peer_max,
+        IP* ip, int* port, int netid, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd)
 {

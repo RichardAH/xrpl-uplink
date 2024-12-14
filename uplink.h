@@ -275,11 +275,11 @@ uint8_t packet_id(char* packet_name);
 
 // if EC_BUSY is returned then ip and port are updated to a random peer to retry a connection to
 int peer_mode(
-        IP* ip, int* port, char* main_path, uint8_t* key, 
+        IP* ip, int* port, int netid, char* main_path, uint8_t* key, 
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
 int main_mode(
-        IP* ip, int* port, int peer_max,
+        IP* ip, int* port, int netid, int peer_max,
         char* peer_path, char* subscriber_path, char* db_path, uint8_t* key,
         ddmode dd_default, std::map<uint8_t, ddmode>& dd_specific, int rnd_fd);
 
@@ -301,7 +301,8 @@ int ssl_handshake_and_upgrade(
         uint8_t* seckey_in,
         uint8_t* our_pubkey_out,
         uint8_t* peer_pubkey_out,
-        std::vector<std::pair<IP, int>>& peerips_out);
+        std::vector<std::pair<IP, int>>& peerips_out,
+        int netid);
 
 int resize_buffer(uint8_t** buffer, size_t needed, size_t* current, size_t large, size_t small);
 
